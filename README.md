@@ -21,3 +21,5 @@ The one requirement for making the scripts work is to have some GameObject with 
 - Replace ray sign checks with a coordinate system change, as described in the NVR paper on pg. 13. (Medium Priority)
 - Eliminate the need for setting a GameObject to use the "Shaders" script. (Low Priority)
 - Make Octree rendering work alongside Unity's normal rendering system. (Low Priority)
+- Implement basic shading. (Low Priority)
+- Implement shadow maps. (Low Priority)
