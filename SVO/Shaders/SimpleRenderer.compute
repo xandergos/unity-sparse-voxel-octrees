@@ -1,0 +1,160 @@
+﻿/*
+
+General purpose renderer for any sparse voxel octree based mesh.
+
+*/
+
+#pragma kernel CSMain
+
+#define BRANCH_TYPE 0
+#define COLOR_VOXEL_TYPE 1
+#define EMPTY_VOXEL_TYPE 2
+
+RWTexture2D<float4> Result;
+RWTexture2D<float> ResultDistance;
+StructuredBuffer<int> _OctreeRoot;
+float4x4 _CameraToWorld;
+float4x4 _CameraInverseProjection;
+float3 _OctreePos;
+float3 _OctreeScale;
+
+struct Ray
+{
+    float3 origin;
+    float3 direction;
+};
+
+Ray CreateCameraRay(float2 uv) 
+{
+    float3 origin = mul(_CameraToWorld, float4(0.0f, 0.0f, 0.0f, 1.0f)).xyz;
+    origin += _OctreeScale;
+    origin -= _OctreePos;
+    origin /= _OctreeScale;
+    float3 direction = mul(_CameraInverseProjection, float4(uv, 0.0f, 1.0f)).xyz;
+    
+    direction = normalize(mul(_CameraToWorld, float4(direction, 0.0f)).xyz);
+
+    Ray ray;
+    ray.origin = origin;
+    ray.direction = direction;
+    
+    return ray;
+}
+
+[numthreads(16,16,1)]
+void CSMain(uint3 id : SV_DispatchThreadID)
+{
+    static const int maxDepth = 23;
+    static const float epsilon = exp2(-maxDepth);
+    
+    // Get the dimensions of the RenderTexture
+    // Depth texture is same dimensions
+    uint width, height;
+    Result.GetDimensions(width, height);
+
+    // Transform pixel to [-1,1] range
+    float2 uv = float2((id.xy + float2(0.5f, 0.5f)) / float2(width, height) * 2.0f - 1.0f);
+
+    // Get the ray from the camera
+    Ray ray = CreateCameraRay(uv);
+    
+    int3 rayDirSign = sign(ray.direction);
+    
+    // Get intersections of chunk (if hit)
+    float root_tmin = max(max(max(
+        (1.5 - .5 * rayDirSign.x - ray.origin.x) / ray.direction.x,
+        (1.5 - .5 * rayDirSign.y - ray.origin.y) / ray.direction.y),
+        (1.5 - .5 * rayDirSign.z - ray.origin.z) / ray.direction.z), 0);
+    float root_tmax = min(min(
+        (1.5 + .5 * rayDirSign.x - ray.origin.x) / ray.direction.x,
+        (1.5 + .5 * rayDirSign.y - ray.origin.y) / ray.direction.y),
+        (1.5 + .5 * rayDirSign.z - ray.origin.z) / ray.direction.z
+    );
+    float3 root_mid = ray.origin + ray.direction * (.5 * (root_tmin + root_tmax));
+    
+    if(root_tmax < 0 || any(abs(root_mid - 1.5f) > .5)) return;
+    
+    float3 nextPath = clamp(ray.origin + ray.direction * root_tmin, 1.f, asfloat(0x3fffffff));
+    
+    int stack[maxDepth + 1];
+    stack[0] = 0;
+    int stackDepth = 0;
+    float3 stackPath = float3(0, 0, 0);
+    
+    int n = 0;
+    do
+    {
+        if(n++ > 100) break;
+        // GET voxel at targetPos
+        int differingBits = asint(stackPath.x) ^ asint(nextPath.x);
+        differingBits |= asint(stackPath.y) ^ asint(nextPath.y);
+        differingBits |= asint(stackPath.z) ^ asint(nextPath.z);
+        differingBits &= 0x007fffff;
+        int firstSet = 23 - firstbithigh(differingBits);
+        int depth = min(firstSet - 1, stackDepth);
+        int ptr = stack[depth];
+        int type = (_OctreeRoot[ptr] >> 30) & 3;
+        while(type == BRANCH_TYPE)
+        {
+            depth++;
+            int xm = (asint(nextPath.x) >> (23 - depth)) & 1;
+            int ym = (asint(nextPath.y) >> (23 - depth)) & 1;
+            int zm = (asint(nextPath.z) >> (23 - depth)) & 1;
+            int childIndex = (xm << 2) + (ym << 1) + zm;
+            ptr++;
+            for(int i = 0; i < childIndex; i++) ptr += ((_OctreeRoot[ptr] >> 30) == BRANCH_TYPE ? _OctreeRoot[ptr] : 1);
+            stack[depth] = ptr;
+            type = (_OctreeRoot[ptr] >> 30) & 3;
+        }
+        stackDepth = depth;
+        nextPath = asfloat(asint(nextPath) & ~((1 << (23 - depth)) - 1));
+        stackPath = nextPath;
+        
+        // DRAW if voxel is solid 
+        if(type == COLOR_VOXEL_TYPE)
+        {
+            int colorRGB = _OctreeRoot[ptr];
+            float4 color = float4(((colorRGB >> 16) & 0xFF) / 255.f, ((colorRGB >> 8) & 0xFF) / 255.f, (colorRGB & 0xFF) / 255.f, 1.f);
+            Result[id.xy] = color;
+            ResultDistance[id.xy] = root_tmin;
+            break;
+        }
+        
+        // STEP to next voxel
+        float x_far = rayDirSign.x == 1 ? asfloat(asint(nextPath.x) + (1 << (23 - depth))) : nextPath.x;
+        float y_far = rayDirSign.y == 1 ? asfloat(asint(nextPath.y) + (1 << (23 - depth))) : nextPath.y;
+        float z_far = rayDirSign.z == 1 ? asfloat(asint(nextPath.z) + (1 << (23 - depth))) : nextPath.z;
+        float tx_max = (x_far - ray.origin.x) / ray.direction.x;
+        float ty_max = (y_far - ray.origin.y) / ray.direction.y;
+        float tz_max = (z_far - ray.origin.z) / ray.direction.z;
+        float t_max = tx_max;
+        
+        if(ty_max < t_max) {
+            if(tz_max < ty_max) {
+                t_max = tz_max;
+                nextPath = ray.origin + ray.direction * t_max;
+                if(rayDirSign.z == 1) nextPath.z = z_far;
+                else nextPath.z = z_far - epsilon;
+            }
+            else {
+                t_max = ty_max;
+                nextPath = ray.origin + ray.direction * t_max;
+                if(rayDirSign.y == 1) nextPath.y = y_far;
+                else nextPath.y = y_far - epsilon;
+            }
+        }
+        else if(tz_max < t_max) {
+            t_max = tz_max;
+            nextPath = ray.origin + ray.direction * t_max;
+            if(rayDirSign.z == 1) nextPath.z = z_far;
+            else nextPath.z = z_far - epsilon;
+        }
+        else {
+            t_max = tx_max;
+            nextPath = ray.origin + ray.direction * t_max;
+            if(rayDirSign.x == 1) nextPath.x = x_far;
+            else nextPath.x = x_far - epsilon;
+        }
+    }
+    while(all(nextPath >= 1.f && nextPath < 2.f));
+}
