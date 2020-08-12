@@ -16,6 +16,7 @@ The one requirement for making the scripts work is to have some GameObject with 
 ## TODO
 
 - Add another layer of abstraction on the rendering process. (High Priority)
+- When a branch is changed, optimize it as well as its parent. (High Priority)
 - Parallelize and optimize the creation of ComputeBuffers from octrees. This includes allowing the creation of ComputeBuffers with a maximum depth. (High Priority)
 - Implement Beam Optimization as described in the Nvidia paper on pg. 13. (Medium Priority)
 - Replace ray sign checks with a coordinate system change, as described in the NVR paper on pg. 13. (Medium Priority)
