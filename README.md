@@ -15,12 +15,10 @@ The one requirement for making the scripts work is to have some GameObject with 
 
 ## TODO
 
-- Add another layer of abstraction on the rendering process. (High Priority)
+- ~~Add another layer of abstraction on the rendering process. (High Priority)~~
 - When a branch is changed, optimize it as well as its parent. (High Priority)
-- Parallelize and optimize the creation of ComputeBuffers from octrees. This includes allowing the creation of ComputeBuffers with a maximum depth. (High Priority)
+- ~~Parallelize and optimize the creation of ComputeBuffers from octrees. This includes allowing the creation of ComputeBuffers with a maximum depth. (High Priority)~~ Not needed now that buffers are edited directly. May change in the future.
 - Implement Beam Optimization as described in the Nvidia paper on pg. 13. (Medium Priority)
-- Replace ray sign checks with a coordinate system change, as described in the NVR paper on pg. 13. (Medium Priority)
-- Eliminate the need for setting a GameObject to use the "Shaders" script. (Low Priority)
 - Make Octree rendering work alongside Unity's normal rendering system. (Low Priority)
 - Implement basic shading. (Low Priority)
 - Implement shadow maps. (Low Priority)
