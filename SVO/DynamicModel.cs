@@ -24,22 +24,6 @@ namespace SVO
             _computeBuffer = new ComputeBuffer(_bufferData.Count, 4);
             _computeBuffer.SetData(_bufferData.ToArray());
             base.Start();
-
-            const int depth = 7;
-            float step = 1/Mathf.Pow(2f, depth);
-            var position = transform.position;
-            var scale = transform.lossyScale;
-            for (var x = 1f; x < 2f; x += step)
-            {
-                for (var z = 1f; z < 2f; z += step)
-                {
-                    var height = Mathf.PerlinNoise(position.x / scale.x + x + 100f, position.z / scale.z + z + 100f) + 1;
-                    for (var y = 1f; y + step < height; y += step)
-                    {
-                        SetVoxelColor(new Vector3(x, y, z), depth, new Color(x - 1, y - 1, z - 1));
-                    }
-                }
-            }
         }
 
         private int GetVoxel(Vector3 pos)
