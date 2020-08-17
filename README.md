@@ -8,10 +8,7 @@ Currently the only way to use the library is to download the files and compile t
 
 ## Setup
 
-The one requirement for making the scripts work is to have some GameObject with the "Shaders" script. Use this script to set the shaders to whatever you want, but make sure to only have one. Currently the recommended shaders are these:
-
-- Unlit: TerrainRenderer (Currently only terrain rendering is supported)
-- Clear: ClearTextures
+Any camera that renders SVOs must have the SvoRenderer script attached with the clear shader and TerrainRenderer shader attached.
 
 ## TODO
 
