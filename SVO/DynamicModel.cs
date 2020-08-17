@@ -129,53 +129,6 @@ namespace SVO
             _computeBuffer.Release();
             _bufferData = null;
         }
-        
-        // For debugging
-        private String VisualizeBufferData()
-        {
-            var str = new StringBuilder();
-
-            void AppendBranch(int ptr, int indentSize)
-            {
-                var v = _bufferData[ptr];
-
-                for (int i = 0; i < indentSize; i++)
-                    str.Append('\t');
-                str.Append("BRANCH ");
-                str.Append(v);
-                str.AppendLine();
-
-                int j = 1;
-                for (int i = 0; i < 8; i++)
-                {
-                    uint type = (uint)_bufferData[ptr + j] >> 30;
-                    if (type == 0)
-                    {
-                        AppendBranch(ptr + j, indentSize + 1);
-                        j += _bufferData[ptr + j];
-                    }
-                    else
-                    {
-                        for (int k = 0; k < indentSize + 1; k++)
-                            str.Append('\t');
-                        if (type == 2)
-                        {
-                            str.Append("EMPTY");
-                        }
-                        else
-                        {
-                            str.Append($"COLORED RGB({_bufferData[ptr + j] << 16 & 0xFF}, {_bufferData[ptr + j] << 8 & 0xFF}, {_bufferData[ptr + j] & 0xFF})");
-                        }
-                        str.AppendLine();
-                        j++;
-                    }
-                }
-            }
-            
-            AppendBranch(0, 0);
-            
-            return str.ToString();
-        }
 
     }
 }
