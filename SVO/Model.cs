@@ -5,9 +5,9 @@ namespace SVO
 {
     public abstract class Model: MonoBehaviour
     {
-        protected virtual void Start()
+        protected virtual void Awake()
         {
-            SVORenderer.Models.Add(this);
+            SvoRenderer.Models.Add(this);
         }
 
         internal abstract void Render(ComputeShader shader, Camera camera, RenderTexture colorTexture, RenderTexture depthMask);

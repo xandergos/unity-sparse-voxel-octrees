@@ -7,7 +7,7 @@ namespace SVO
     /**
      * This class must be attached to a camera for it to render SVOs.
      */
-    public class SVORenderer: MonoBehaviour
+    public class SvoRenderer: MonoBehaviour
     {
         private class ModelSorter: Comparer<Model>
         {

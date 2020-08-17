@@ -9,6 +9,7 @@ Renderer for cubic chunks. Same as "SimpleRenderer" but chunks can be culled bef
 #define POINTER_TYPE 0
 #define COLOR_VOXEL_TYPE 1
 #define EMPTY_VOXEL_TYPE 2
+// TODO: #define TEXTURED_VOXEL_TYPE 3
 
 RWTexture2D<float4> result_texture;
 RWTexture2D<float> depth_mask;
@@ -167,7 +168,7 @@ void CSMain(uint3 id : SV_DispatchThreadID)
             else next_path.x = x_far - epsilon;
         }
         
-        max_lod = (int)(23 / (t_max/1 + 1));
+        max_lod = (int)(23 / (t_max/10 + 1));
     }
     while(all(next_path >= 1.f && next_path < 2.f));
 }

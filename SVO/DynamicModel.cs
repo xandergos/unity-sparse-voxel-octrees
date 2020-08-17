@@ -1,4 +1,4 @@
-﻿using System;
+﻿﻿using System;
 using System.Collections.Generic;
 using System.Text;
 using UnityEngine;
@@ -8,7 +8,7 @@ namespace SVO
 {
     /**
      * Model that can be changed at runtime. Good for voxel, minecraft-like terrain.
-     * Its recommended that these models keep a depth of around ~5, occasionally going up to about 8.
+     * Its recommended that these models generally stay at a depth of about 7 or less, although at times can go up as high as 10.
      * Dynamic models have to store a copy of their data on the CPU, and must be sent to the GPU when a change is
      * made.
      */
@@ -18,12 +18,13 @@ namespace SVO
         private int _rootPtr = 0;
         private List<int> _bufferData = new List<int>(new[] {2 << 30});
         private bool _shouldUpdateBuffer;
+        private Queue<int> _freeMemoryPtrs = new Queue<int>();
 
-        protected override void Start()
+        protected override void Awake()
         {
             _computeBuffer = new ComputeBuffer(_bufferData.Count, 4);
             _computeBuffer.SetData(_bufferData.ToArray());
-            base.Start();
+            base.Awake();
         }
 
         private int GetVoxel(Vector3 pos)
@@ -51,7 +52,13 @@ namespace SVO
             return _bufferData[ptr];
         }
 
-        public void SetVoxelColor(Vector3 position, int depth, Color color)
+        public void SetVoxelColor(Vector3 position, int depth, Color color) 
+            => SetVoxel(position, depth, (1 << 30) | ((int)(color.r * 255) << 16) | 
+                                         ((int)(color.g * 255) << 8) | (int)(color.b * 255));
+
+        public void DeleteVoxels(Vector3 position, int depth) => SetVoxel(position, depth, 2 << 30);
+
+        private void SetVoxel(Vector3 position, int depth, int data)
         {
             int ptr = 0; // Root ptr
             int type = (_bufferData[ptr] >> 30) & 3; // Type of root node
@@ -74,27 +81,61 @@ namespace SVO
                 type = (_bufferData[ptr] >> 30) & 3;
             }
 
-            var rgb = ((int) (color.r * 255) << 16) + ((int) (color.g * 255) << 8) + (int) (color.b * 255);
+            // Data can be compressed
+            if (type == 0)
+                FreeMemory(_bufferData[ptr]);
+
             var original = _bufferData[ptr];
             while (stepDepth < depth)
             {
                 stepDepth++;
                 // Create another branch to go down another depth
-                _bufferData[ptr] = _bufferData.Count;
-                ptr = _bufferData.Count;
+                _bufferData[ptr] = AllocateBranch(original);
+                ptr = _bufferData[ptr];
+                
+                // Move to the position of the right child node.
                 int xm = (BitConverter.ToInt32(BitConverter.GetBytes(position.x), 0) >> (23 - stepDepth)) & 1;
                 int ym = (BitConverter.ToInt32(BitConverter.GetBytes(position.y), 0) >> (23 - stepDepth)) & 1;
                 int zm = (BitConverter.ToInt32(BitConverter.GetBytes(position.z), 0) >> (23 - stepDepth)) & 1;
                 int childIndex = (xm << 2) + (ym << 1) + zm;
                 ptr += childIndex;
-                // Create a new branch full of the previous voxel.
-                _bufferData.AddRange(new [] { original, original, original, original, original, original, original, original });
             }
-            _bufferData[ptr] = (1 << 30) | rgb;
+            _bufferData[ptr] = data;
             
             _shouldUpdateBuffer = true;
         }
 
+        private void FreeMemory(int ptr)
+        {
+            _freeMemoryPtrs.Enqueue(ptr);
+            for (int i = 0; i < 8; i++)
+            {
+                var n = ptr + i;
+                if(((n >> 30) & 3) == 0) FreeMemory(n);
+            }
+        }
+
+        private int AllocateBranch(int defaultValue)
+        {
+            if (_freeMemoryPtrs.Count != 0)
+            {
+                var ptr = _freeMemoryPtrs.Dequeue();
+                for (int i = 0; i < 8; i++)
+                    _bufferData[ptr + i] = defaultValue;
+                return ptr;
+            }
+            else
+            {
+                var ptr = _bufferData.Count;
+                _bufferData.AddRange(new[]
+                {
+                    defaultValue, defaultValue, defaultValue, defaultValue,
+                    defaultValue, defaultValue, defaultValue, defaultValue
+                });
+                return ptr;
+            }
+        }
+        
         internal override void Render(ComputeShader shader, Camera camera, RenderTexture colorTexture, RenderTexture depthMask)
         {
             if (_shouldUpdateBuffer)
