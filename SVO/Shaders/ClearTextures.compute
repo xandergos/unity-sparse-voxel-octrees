@@ -1,11 +1,12 @@
 ﻿#pragma kernel CSMain
 
-RWTexture2D<float> ResultDistance;
-RWTexture2D<float4> Result;
+RWTexture2D<float> depth_mask;
+RWTexture2D<float4> result_texture;
 
 [numthreads(16,16,1)]
 void CSMain (uint3 id : SV_DispatchThreadID)
 {
-    ResultDistance[id.xy] = 1.#INF;
-    Result[id.xy] = float4(0.f, 0.f, 0.f, 0.f);
+    const float inf = asfloat(0x7f800000);
+    depth_mask[id.xy] = inf;
+    result_texture[id.xy] = float4(0.f, 0.f, 0.f, 0.f);
 }
