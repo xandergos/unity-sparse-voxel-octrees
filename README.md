@@ -8,7 +8,7 @@ Currently the only way to use the library is to download the files and compile t
 
 ## Setup
 
-Any camera that renders SVOs must have the SvoRenderer script attached with the clear shader and TerrainRenderer shader attached.
+Any camera that renders SVOs must have the SvoRenderer script attached with the appropriate shaders attached.
 
 ## TODO
 
