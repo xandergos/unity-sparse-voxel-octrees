@@ -8,19 +8,14 @@ Currently the only way to use the library is to download the files and compile t
 
 ## Setup
 
-The one requirement for making the scripts work is to have some GameObject with the "Shaders" script. Use this script to set the shaders to whatever you want, but make sure to only have one. Currently the recommended shaders are these:
-
-- Unlit: TerrainRenderer (Currently only terrain rendering is supported)
-- Clear: ClearTextures
+Any camera that renders SVOs must have the SvoRenderer script attached with the clear shader and TerrainRenderer shader attached.
 
 ## TODO
 
-- Add another layer of abstraction on the rendering process. (High Priority)
+- ~~Add another layer of abstraction on the rendering process. (High Priority)~~
 - When a branch is changed, optimize it as well as its parent. (High Priority)
-- Parallelize and optimize the creation of ComputeBuffers from octrees. This includes allowing the creation of ComputeBuffers with a maximum depth. (High Priority)
+- ~~Parallelize and optimize the creation of ComputeBuffers from octrees. This includes allowing the creation of ComputeBuffers with a maximum depth. (High Priority)~~ Not needed now that buffers are edited directly. May change in the future.
 - Implement Beam Optimization as described in the Nvidia paper on pg. 13. (Medium Priority)
-- Replace ray sign checks with a coordinate system change, as described in the NVR paper on pg. 13. (Medium Priority)
-- Eliminate the need for setting a GameObject to use the "Shaders" script. (Low Priority)
 - Make Octree rendering work alongside Unity's normal rendering system. (Low Priority)
 - Implement basic shading. (Low Priority)
 - Implement shadow maps. (Low Priority)
