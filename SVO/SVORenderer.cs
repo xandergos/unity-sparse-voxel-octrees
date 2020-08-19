@@ -29,15 +29,18 @@ namespace SVO
         }
 
         // Model registry
-        internal static List<Model> Models = new List<Model>();
+        internal static readonly List<Model> Models = new List<Model>();
         private static ModelSorter _modelSorter;
             
         public ComputeShader clearShader;
         public ComputeShader colorDepthShader;
+        public ComputeShader lightingShader;
 
         private Camera _camera;
-        private RenderTexture _svoTexture;
-        private RenderTexture _svoDepthMask;
+        private RenderTexture _diffuseTexture;
+        private RenderTexture _positionTexture;
+        private RenderTexture _normalTexture;
+        private RenderTexture _resultTexture;
 
         public void Start()
         {
@@ -53,35 +56,57 @@ namespace SVO
             
             int threadGroupsX = Mathf.CeilToInt(Screen.width / 16.0f);
             int threadGroupsY = Mathf.CeilToInt(Screen.height / 16.0f);
-            clearShader.SetTexture(0, "result_texture", _svoTexture);
-            clearShader.SetTexture(0, "depth_mask", _svoDepthMask);
+            clearShader.SetTexture(0, "diffuse_texture", _diffuseTexture);
+            clearShader.SetTexture(0, "position_texture", _positionTexture);
+            clearShader.SetTexture(0, "normal_texture", _normalTexture);
             clearShader.Dispatch(0, threadGroupsX, threadGroupsY, 1);
 
-            var frustrumPlanes = GeometryUtility.CalculateFrustumPlanes(_camera);
+            // var frustrumPlanes = GeometryUtility.CalculateFrustumPlanes(_camera);
             foreach (var model in Models)
             {
-                model.Render(colorDepthShader, _camera, _svoTexture, _svoDepthMask);   
+                model.Render(colorDepthShader, _camera, _diffuseTexture, _positionTexture, _normalTexture);   
             }
-            Graphics.Blit(_svoTexture, dest);
+            
+            lightingShader.SetTexture(0, "result_texture", _resultTexture);
+            lightingShader.SetTexture(0, "diffuse_texture", _diffuseTexture);
+            lightingShader.SetTexture(0, "position_texture", _positionTexture);
+            lightingShader.SetTexture(0, "normal_texture", _normalTexture);
+            lightingShader.SetVector("sun_direction", new Vector3(.5f, -1f, .6f).normalized);
+            lightingShader.SetVector("sun_diffuse", new Vector3(1f, 1f, 1f));
+            lightingShader.SetVector("sun_specular", new Vector3(.04f, .05f, .04f));
+            lightingShader.SetFloat("sun_shininess", 2f);
+            lightingShader.SetVector("ambient_light", new Vector3(.4f, .45f, .4f));
+            lightingShader.SetVector("cam_pos", _camera.transform.position);
+            
+            lightingShader.Dispatch(0, threadGroupsX, threadGroupsY, 1);
+            
+            Graphics.Blit(_resultTexture, dest);
         }
 
         private void CreateTextures()
         {
-            if (_svoTexture == null || _svoDepthMask == null ||
-                Screen.width != _svoTexture.width || Screen.height != _svoTexture.height ||
-                Screen.width != _svoDepthMask.width || Screen.height != _svoDepthMask.height)
+            if (_diffuseTexture == null || _positionTexture == null ||  _diffuseTexture == null || _resultTexture == null ||
+                Screen.width != _diffuseTexture.width || Screen.height != _diffuseTexture.height)
             {
-                if(_svoTexture != null) _svoTexture.Release();
-                if(_svoDepthMask != null) _svoDepthMask.Release();
+                if(_diffuseTexture != null) _diffuseTexture.Release();
+                if(_positionTexture != null) _positionTexture.Release();
+                if(_normalTexture != null) _normalTexture.Release();
+                if(_resultTexture != null) _resultTexture.Release();
                 
-                _svoTexture = new RenderTexture(Screen.width, Screen.height, 0, RenderTextureFormat.ARGB32);
-                _svoDepthMask = new RenderTexture(Screen.width, Screen.height, 0, RenderTextureFormat.RFloat);
+                _diffuseTexture = new RenderTexture(Screen.width, Screen.height, 0, RenderTextureFormat.ARGB32);
+                _positionTexture = new RenderTexture(Screen.width, Screen.height, 0, RenderTextureFormat.ARGBFloat);
+                _normalTexture = new RenderTexture(Screen.width, Screen.height, 0, RenderTextureFormat.ARGB32);
+                _resultTexture = new RenderTexture(Screen.width, Screen.height, 0, RenderTextureFormat.ARGB32);
 
-                _svoTexture.enableRandomWrite = true;
-                _svoDepthMask.enableRandomWrite = true;
+                _diffuseTexture.enableRandomWrite = true;
+                _positionTexture.enableRandomWrite = true;
+                _normalTexture.enableRandomWrite = true;
+                _resultTexture.enableRandomWrite = true;
 
-                _svoTexture.Create();
-                _svoDepthMask.Create();
+                _diffuseTexture.Create();
+                _positionTexture.Create();
+                _normalTexture.Create();
+                _resultTexture.Create();   
             }
         }
     }

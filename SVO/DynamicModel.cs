@@ -1,4 +1,4 @@
-﻿﻿using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Text;
 using UnityEngine;
@@ -15,10 +15,9 @@ namespace SVO
     public class DynamicModel: Model
     {
         private ComputeBuffer _computeBuffer;
-        private int _rootPtr = 0;
         private List<int> _bufferData = new List<int>(new[] {2 << 30});
         private bool _shouldUpdateBuffer;
-        private Queue<int> _freeMemoryPtrs = new Queue<int>();
+        private readonly Queue<int> _freeMemoryPointers = new Queue<int>();
 
         protected override void Awake()
         {
@@ -107,21 +106,22 @@ namespace SVO
 
         private void FreeMemory(int ptr)
         {
-            _freeMemoryPtrs.Enqueue(ptr);
-            for (int i = 0; i < 8; i++)
-            {
-                var n = ptr + i;
-                if(((n >> 30) & 3) == 0) FreeMemory(n);
-            }
+            _freeMemoryPointers.Enqueue(ptr);
         }
 
         private int AllocateBranch(int defaultValue)
         {
-            if (_freeMemoryPtrs.Count != 0)
+            if (_freeMemoryPointers.Count != 0)
             {
-                var ptr = _freeMemoryPtrs.Dequeue();
+                var ptr = _freeMemoryPointers.Dequeue();
                 for (int i = 0; i < 8; i++)
                     _bufferData[ptr + i] = defaultValue;
+                // Free child pointers
+                for (int i = 0; i < 8; i++)
+                {
+                    var n = ptr + i;
+                    if(((n >> 30) & 3) == 0) FreeMemory(n);
+                }
                 return ptr;
             }
             else
@@ -136,7 +136,7 @@ namespace SVO
             }
         }
         
-        internal override void Render(ComputeShader shader, Camera camera, RenderTexture colorTexture, RenderTexture depthMask)
+        internal override void Render(ComputeShader shader, Camera camera, RenderTexture diffuseTexture, RenderTexture positionTexture, RenderTexture normalTexture)
         {
             if (_shouldUpdateBuffer)
             {
@@ -149,18 +149,18 @@ namespace SVO
                 _computeBuffer.SetData(_bufferData.ToArray());
             }
             
-            int threadGroupsX = Mathf.CeilToInt(Screen.width / 16.0f);
-            int threadGroupsY = Mathf.CeilToInt(Screen.height / 16.0f);
+            var threadGroupsX = Mathf.CeilToInt(Screen.width / 16.0f);
+            var threadGroupsY = Mathf.CeilToInt(Screen.height / 16.0f);
             
             // Update Parameters
             shader.SetBuffer(0, "octree_root", _computeBuffer);
-            shader.SetTexture(0, "result_texture", colorTexture);
-            shader.SetTexture(0, "depth_mask", depthMask);
+            shader.SetTexture(0, "diffuse_texture", diffuseTexture);
+            shader.SetTexture(0, "position_texture", positionTexture);
+            shader.SetTexture(0, "normal_texture", normalTexture);
             shader.SetMatrix("camera_to_world", camera.cameraToWorldMatrix);
             shader.SetMatrix("camera_inverse_projection", camera.projectionMatrix.inverse);
             shader.SetVector("octree_pos", transform.position);
             shader.SetVector("octree_scale", transform.lossyScale);
-            shader.SetInt("root_ptr", _rootPtr); 
             
             shader.Dispatch(0, threadGroupsX, threadGroupsY, 1);
         }
@@ -170,6 +170,5 @@ namespace SVO
             _computeBuffer.Release();
             _bufferData = null;
         }
-
     }
 }

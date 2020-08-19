@@ -7,8 +7,7 @@ namespace SVO
      */
     public class StaticModel: Model
     {
-        // TODO
-        internal override void Render(ComputeShader shader, Camera camera, RenderTexture colorTexture, RenderTexture depthMask)
+        internal override void Render(ComputeShader shader, Camera camera, RenderTexture diffuseTexture, RenderTexture positionTexture, RenderTexture normalTexture)
         {
             throw new System.NotImplementedException();
         }

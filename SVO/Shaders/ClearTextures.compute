@@ -1,12 +1,14 @@
-﻿#pragma kernel CSMain
+﻿#pragma kernel cs_main
 
-RWTexture2D<float> depth_mask;
-RWTexture2D<float4> result_texture;
+RWTexture2D<float3> position_texture;
+RWTexture2D<float4> diffuse_texture;
+RWTexture2D<float3> normal_texture;
 
 [numthreads(16,16,1)]
-void CSMain (uint3 id : SV_DispatchThreadID)
+void cs_main (uint3 id : SV_DispatchThreadID)
 {
     const float inf = asfloat(0x7f800000);
-    depth_mask[id.xy] = inf;
-    result_texture[id.xy] = float4(0.f, 0.f, 0.f, 0.f);
+    position_texture[id.xy] = float3(inf, inf, inf);
+    diffuse_texture[id.xy] = float4(0.f, 0.f, 0.f, 0.f);
+    normal_texture[id.xy] = float3(0.f, 0.f, 0.f);
 }

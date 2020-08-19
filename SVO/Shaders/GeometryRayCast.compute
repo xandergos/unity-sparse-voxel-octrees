@@ -1,0 +1,227 @@
+﻿#pragma kernel cs_main
+
+#define POINTER_TYPE 0
+#define COLOR_VOXEL_TYPE 1
+#define EMPTY_VOXEL_TYPE 2
+
+// Textures
+RWTexture2D<float4> diffuse_texture;
+RWTexture2D<float3> position_texture;
+RWTexture2D<float3> normal_texture;
+
+// Octree Data
+StructuredBuffer<int> octree_root;
+
+// Camera data
+float4x4 camera_to_world;
+float4x4 camera_inverse_projection;
+float3 octree_pos;
+float3 octree_scale;
+
+struct ray
+{
+    float3 origin;
+    float3 direction;
+};
+
+struct ray_hit
+{
+    float distance;
+    float3 position;
+    float3 normal;
+};
+
+ray create_camera_ray(float2 uv) 
+{
+    float3 origin = mul(camera_to_world, float4(0.0f, 0.0f, 0.0f, 1.0f)).xyz;
+    origin += octree_scale;
+    origin -= octree_pos;
+    origin /= octree_scale;
+    float3 direction = mul(camera_inverse_projection, float4(uv, 0.0f, 1.0f)).xyz;
+    
+    direction = mul(camera_to_world, float4(direction, 0.0f)).xyz;
+    direction /= octree_scale;
+    direction = normalize(direction);
+
+    ray ray;
+    ray.origin = origin;
+    ray.direction = direction;
+    
+    return ray;
+}
+
+ray_hit get_first_hit(ray ray, int3 ray_sign, float3 pos, int depth)
+{
+    // Get ray hit on far side of voxel.
+    float x_near = ray_sign.x == -1 ? asfloat(asint(pos.x) + (1 << 23 - depth)) : pos.x;
+    float y_near = ray_sign.y == -1 ? asfloat(asint(pos.y) + (1 << 23 - depth)) : pos.y;
+    float z_near = ray_sign.z == -1 ? asfloat(asint(pos.z) + (1 << 23 - depth)) : pos.z;
+    float tx_min = (x_near - ray.origin.x) / ray.direction.x;
+    float ty_min = (y_near - ray.origin.y) / ray.direction.y;
+    float tz_min = (z_near - ray.origin.z) / ray.direction.z;
+    float t_min = tx_min;
+
+    ray_hit hit;
+        
+    if(ty_min > t_min) {
+        if(tz_min > ty_min) {
+            t_min = tz_min;
+            hit.position = t_min * ray.direction + ray.origin;
+            hit.position.z = z_near;
+            hit.normal = float3(0.f, 0.f, -ray_sign.z);
+        }
+        else {
+            t_min = ty_min;
+            hit.position = t_min * ray.direction + ray.origin;
+            hit.position.y = y_near;
+            hit.normal = float3(0.f, -ray_sign.y, 0.f);
+        }
+    }
+    else if(tz_min > t_min) {
+        t_min = tz_min;
+        hit.position = t_min * ray.direction + ray.origin;
+        hit.position.z = z_near;
+        hit.normal = float3(0.f, 0.f, -ray_sign.z);
+    }
+    else {
+        t_min = tx_min;
+        hit.position = t_min * ray.direction + ray.origin;
+        hit.position.x = x_near;
+        hit.normal = float3(-ray_sign.x, 0.f, 0.f);
+    }
+    hit.distance = t_min;
+    
+    return hit;
+}
+
+[numthreads(16,16,1)]
+void cs_main(uint3 id : SV_DispatchThreadID)
+{
+    static const int max_depth = 23;
+    static const float epsilon = exp2(-max_depth);
+    
+    // Get the dimensions of the RenderTexture
+    // Depth texture is same dimensions
+    uint width, height;
+    diffuse_texture.GetDimensions(width, height);
+
+    // Transform pixel to [-1,1] range
+    float2 uv = float2((id.xy + float2(0.5f, 0.5f)) / float2(width, height) * 2.0f - 1.0f);
+
+    // Get the ray from the camera
+    ray ray = create_camera_ray(uv);
+
+    float last_ray_distance_sqr = dot(position_texture[id.xy] - ray.origin, position_texture[id.xy] - ray.origin);
+    int3 ray_dir_sign = sign(ray.direction);
+    
+    // Get intersections of chunk (if hit)
+    float root_tmin = max(max(max(
+        (1.5 - .5 * ray_dir_sign.x - ray.origin.x) / ray.direction.x,
+        (1.5 - .5 * ray_dir_sign.y - ray.origin.y) / ray.direction.y),
+        (1.5 - .5 * ray_dir_sign.z - ray.origin.z) / ray.direction.z), 0);
+    float root_tmax = min(min(
+        (1.5 + .5 * ray_dir_sign.x - ray.origin.x) / ray.direction.x,
+        (1.5 + .5 * ray_dir_sign.y - ray.origin.y) / ray.direction.y),
+        (1.5 + .5 * ray_dir_sign.z - ray.origin.z) / ray.direction.z
+    );
+    float3 root_mid = ray.origin + ray.direction * (.5 * (root_tmin + root_tmax));
+    
+    if(root_tmax < 0 || any(abs(root_mid - 1.5f) > .5) || root_tmin * root_tmin > last_ray_distance_sqr) return;
+    
+    float3 next_path = clamp(ray.origin + ray.direction * root_tmin, 1.f, asfloat(0x3fffffff));
+    
+    int stack[max_depth + 1];
+    stack[0] = 0;
+    int stack_depth = 0;
+    float3 stack_path = float3(0, 0, 0);
+    
+    int max_lod = 23;
+    int n = 0;
+    do
+    {
+        if(n++ > 300) break;
+        // GET voxel at targetPos
+        int differing_bits = asint(stack_path.x) ^ asint(next_path.x);
+        differing_bits |= asint(stack_path.y) ^ asint(next_path.y);
+        differing_bits |= asint(stack_path.z) ^ asint(next_path.z);
+        differing_bits &= 0x007fffff;
+        int first_set = 23 - firstbithigh(differing_bits);
+        int depth = min(first_set - 1, stack_depth);
+        int ptr = stack[depth];
+        int type = octree_root[ptr] >> 30 & 3;
+        while(type == POINTER_TYPE && depth < max_lod)
+        {
+            ptr = octree_root[ptr];
+            depth++;
+            int xm = asint(next_path.x) >> 23 - depth & 1;
+            int ym = asint(next_path.y) >> 23 - depth & 1;
+            int zm = asint(next_path.z) >> 23 - depth & 1;
+            int child_index = (xm << 2) + (ym << 1) + zm;
+            ptr += child_index;
+            stack[depth] = ptr;
+            type = octree_root[ptr] >> 30 & 3;
+        }
+        // If max LOD hit, just go to the first voxel in the branch.
+        while(type == POINTER_TYPE)
+        {
+            ptr++;
+            if(octree_root[ptr] >> 30 == POINTER_TYPE)
+                ptr = octree_root[ptr] & 0x3FFFFFFF;
+            type = octree_root[ptr] >> 30 & 3;
+        }
+        stack_depth = depth;
+        next_path = asfloat(asint(next_path) & ~((1 << 23 - depth) - 1));
+        stack_path = next_path;
+        
+        // DRAW if voxel is solid
+        if(type == COLOR_VOXEL_TYPE)
+        {
+            ray_hit hit = get_first_hit(ray, ray_dir_sign, stack_path, depth);
+            int color_rgb = octree_root[ptr];
+            float4 color = float4((color_rgb >> 16 & 0xFF) / 255.f, (color_rgb >> 8 & 0xFF) / 255.f, (color_rgb & 0xFF) / 255.f, 1.f);
+            diffuse_texture[id.xy] = color;
+            position_texture[id.xy] = (hit.position - 1) * octree_scale + octree_pos;
+            normal_texture[id.xy] = float3((float)hit.normal.x / 2.f + .5f, (float)hit.normal.y / 2.f + .5f, (float)hit.normal.z / 2.f + .5f);
+            break;
+        }
+
+        // Get ray hit on far side of voxel.
+        float x_far = ray_dir_sign.x == 1 ? asfloat(asint(next_path.x) + (1 << 23 - depth)) : next_path.x;
+        float y_far = ray_dir_sign.y == 1 ? asfloat(asint(next_path.y) + (1 << 23 - depth)) : next_path.y;
+        float z_far = ray_dir_sign.z == 1 ? asfloat(asint(next_path.z) + (1 << 23 - depth)) : next_path.z;
+        float tx_max = (x_far - ray.origin.x) / ray.direction.x;
+        float ty_max = (y_far - ray.origin.y) / ray.direction.y;
+        float tz_max = (z_far - ray.origin.z) / ray.direction.z;
+        float t_max = tx_max;
+        
+        if(ty_max < t_max) {
+            if(tz_max < ty_max) {
+                t_max = tz_max;
+                next_path = ray.origin + ray.direction * t_max;
+                if(ray_dir_sign.z == 1) next_path.z = z_far;
+                else next_path.z = z_far - epsilon;
+            }
+            else {
+                t_max = ty_max;
+                next_path = ray.origin + ray.direction * t_max;
+                if(ray_dir_sign.y == 1) next_path.y = y_far;
+                else next_path.y = y_far - epsilon;
+            }
+        }
+        else if(tz_max < t_max) {
+            t_max = tz_max;
+            next_path = ray.origin + ray.direction * t_max;
+            if(ray_dir_sign.z == 1) next_path.z = z_far;
+            else next_path.z = z_far - epsilon;
+        }
+        else {
+            t_max = tx_max;
+            next_path = ray.origin + ray.direction * t_max;
+            if(ray_dir_sign.x == 1) next_path.x = x_far;
+            else next_path.x = x_far - epsilon;
+        }
+         
+        max_lod = (int)(23 / (t_max/10 + 1));
+    }
+    while(all(next_path >= 1.f && next_path < 2.f));
+}

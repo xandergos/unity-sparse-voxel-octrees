@@ -10,6 +10,6 @@ namespace SVO
             SvoRenderer.Models.Add(this);
         }
 
-        internal abstract void Render(ComputeShader shader, Camera camera, RenderTexture colorTexture, RenderTexture depthMask);
+        internal abstract void Render(ComputeShader shader, Camera camera, RenderTexture diffuseTexture, RenderTexture positionTexture, RenderTexture normalTexture);
     }
 }
