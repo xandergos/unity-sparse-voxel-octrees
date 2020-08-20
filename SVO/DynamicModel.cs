@@ -1,8 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Text;
 using UnityEngine;
-using Random = UnityEngine.Random;
 
 namespace SVO
 {
@@ -18,6 +16,10 @@ namespace SVO
         private List<int> _bufferData = new List<int>(new[] {2 << 30});
         private bool _shouldUpdateBuffer;
         private readonly Queue<int> _freeMemoryPointers = new Queue<int>();
+        
+        private readonly int[] _ptrStack = new int[24];
+        private Vector3 _ptrStackPos = Vector3.zero;
+        private int _ptrStackDepth;
 
         protected override void Awake()
         {
@@ -59,9 +61,19 @@ namespace SVO
 
         private void SetVoxel(Vector3 position, int depth, int data)
         {
-            int ptr = 0; // Root ptr
+            static int AsInt(float f) => BitConverter.ToInt32(BitConverter.GetBytes(f), 0);
+            static int FirstSetHigh(int i) => (AsInt(i) >> 23) - 127;
+            
+            // This can skip a lot of tree iterations if the last voxel set was near this one.
+            int differingBits = AsInt(_ptrStackPos.x) ^ AsInt(position.x);
+            differingBits |= AsInt(_ptrStackPos.y) ^ AsInt(position.y);
+            differingBits |= AsInt(_ptrStackPos.z) ^ AsInt(position.z);
+            differingBits &= 0x007fffff;
+            int firstSet = 23 - FirstSetHigh(differingBits);
+            int stepDepth = Math.Min(Math.Min(firstSet - 1, _ptrStackDepth), depth);
+            
+            int ptr = _ptrStack[stepDepth];
             int type = (_bufferData[ptr] >> 30) & 3; // Type of root node
-            int stepDepth = 0;
             // Step down one depth until a non-ptr node is hit or the max depth is reached.
             while(type == 0 && stepDepth < depth)
             {
@@ -75,10 +87,13 @@ namespace SVO
                 int zm = (BitConverter.ToInt32(BitConverter.GetBytes(position.z), 0) >> (23 - stepDepth)) & 1;
                 int childIndex = (xm << 2) + (ym << 1) + zm;
                 ptr += childIndex;
+                _ptrStack[stepDepth] = ptr;
                 
                 // Get type of the node
                 type = (_bufferData[ptr] >> 30) & 3;
             }
+            _ptrStackDepth = stepDepth;
+            _ptrStackPos = position;
 
             // Data can be compressed
             if (type == 0)

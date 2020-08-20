@@ -100,8 +100,7 @@ void cs_main(uint3 id : SV_DispatchThreadID)
     static const int max_depth = 23;
     static const float epsilon = exp2(-max_depth);
     
-    // Get the dimensions of the RenderTexture
-    // Depth texture is same dimensions
+    // Dimensions of all textures
     uint width, height;
     diffuse_texture.GetDimensions(width, height);
 
@@ -115,18 +114,22 @@ void cs_main(uint3 id : SV_DispatchThreadID)
     int3 ray_dir_sign = sign(ray.direction);
     
     // Get intersections of chunk (if hit)
-    float root_tmin = max(max(max(
-        (1.5 - .5 * ray_dir_sign.x - ray.origin.x) / ray.direction.x,
-        (1.5 - .5 * ray_dir_sign.y - ray.origin.y) / ray.direction.y),
-        (1.5 - .5 * ray_dir_sign.z - ray.origin.z) / ray.direction.z), 0);
-    float root_tmax = min(min(
-        (1.5 + .5 * ray_dir_sign.x - ray.origin.x) / ray.direction.x,
-        (1.5 + .5 * ray_dir_sign.y - ray.origin.y) / ray.direction.y),
-        (1.5 + .5 * ray_dir_sign.z - ray.origin.z) / ray.direction.z
-    );
+    float3 root_min_distances = (1.5 - .5 * ray_dir_sign - ray.origin) / ray.direction;
+    float3 root_max_distances = (1.5 + .5 * ray_dir_sign - ray.origin) / ray.direction;
+    float root_tmin = max(max(max(root_min_distances.x, root_min_distances.y), root_min_distances.z), 0);
+    float root_tmax = min(min(root_max_distances.x, root_max_distances.y), root_max_distances.z);
     float3 root_mid = ray.origin + ray.direction * (.5 * (root_tmin + root_tmax));
+
+    float3 true_camera_pos = mul(camera_to_world, float4(0, 0, 0, 1)).xyz;
     
-    if(root_tmax < 0 || any(abs(root_mid - 1.5f) > .5) || root_tmin * root_tmin > last_ray_distance_sqr) return;
+    float3 root_world_intersect = (ray.direction * root_tmin + ray.origin - 1) * octree_scale + octree_pos;
+    float3 root_offset = root_world_intersect - true_camera_pos;
+    float root_dist_sqr = dot(root_offset, root_offset);
+
+    float3 last_pos_offset = position_texture[id.xy] - true_camera_pos;
+    float last_dist = dot(last_pos_offset, last_pos_offset);
+    
+    if(root_tmax < 0 || any(abs(root_mid - 1.5f) > .5) || root_dist_sqr > last_dist) return;
     
     float3 next_path = clamp(ray.origin + ray.direction * root_tmin, 1.f, asfloat(0x3fffffff));
     
@@ -135,7 +138,6 @@ void cs_main(uint3 id : SV_DispatchThreadID)
     int stack_depth = 0;
     float3 stack_path = float3(0, 0, 0);
     
-    int max_lod = 23;
     int n = 0;
     do
     {
@@ -149,7 +151,7 @@ void cs_main(uint3 id : SV_DispatchThreadID)
         int depth = min(first_set - 1, stack_depth);
         int ptr = stack[depth];
         int type = octree_root[ptr] >> 30 & 3;
-        while(type == POINTER_TYPE && depth < max_lod)
+        while(type == POINTER_TYPE)
         {
             ptr = octree_root[ptr];
             depth++;
@@ -161,16 +163,8 @@ void cs_main(uint3 id : SV_DispatchThreadID)
             stack[depth] = ptr;
             type = octree_root[ptr] >> 30 & 3;
         }
-        // If max LOD hit, just go to the first voxel in the branch.
-        while(type == POINTER_TYPE)
-        {
-            ptr++;
-            if(octree_root[ptr] >> 30 == POINTER_TYPE)
-                ptr = octree_root[ptr] & 0x3FFFFFFF;
-            type = octree_root[ptr] >> 30 & 3;
-        }
         stack_depth = depth;
-        next_path = asfloat(asint(next_path) & ~((1 << 23 - depth) - 1));
+        next_path = asfloat(asint(next_path) & ~((1 << 23 - depth) - 1)); // Remove unused bits from next_path
         stack_path = next_path;
         
         // DRAW if voxel is solid
@@ -179,9 +173,13 @@ void cs_main(uint3 id : SV_DispatchThreadID)
             ray_hit hit = get_first_hit(ray, ray_dir_sign, stack_path, depth);
             int color_rgb = octree_root[ptr];
             float4 color = float4((color_rgb >> 16 & 0xFF) / 255.f, (color_rgb >> 8 & 0xFF) / 255.f, (color_rgb & 0xFF) / 255.f, 1.f);
+
+            // Update textures. Coordinates are also transformed to world-space.
             diffuse_texture[id.xy] = color;
             position_texture[id.xy] = (hit.position - 1) * octree_scale + octree_pos;
+            // Normals transformed to [0, 1] range
             normal_texture[id.xy] = float3((float)hit.normal.x / 2.f + .5f, (float)hit.normal.y / 2.f + .5f, (float)hit.normal.z / 2.f + .5f);
+            
             break;
         }
 
@@ -220,8 +218,6 @@ void cs_main(uint3 id : SV_DispatchThreadID)
             if(ray_dir_sign.x == 1) next_path.x = x_far;
             else next_path.x = x_far - epsilon;
         }
-         
-        max_lod = (int)(23 / (t_max/10 + 1));
     }
     while(all(next_path >= 1.f && next_path < 2.f));
 }
