@@ -12,10 +12,7 @@ Any camera that renders SVOs must have the SvoRenderer script attached with the 
 
 ## TODO
 
-- ~~Add another layer of abstraction on the rendering process. (High Priority)~~
 - When a branch is changed, optimize it as well as its parent. (High Priority)
-- ~~Parallelize and optimize the creation of ComputeBuffers from octrees. This includes allowing the creation of ComputeBuffers with a maximum depth. (High Priority)~~ Not needed now that buffers are edited directly. May change in the future.
 - Make Octree rendering work alongside Unity's normal rendering system. (Low Priority)
-- ~~Implement basic shading. (Low Priority)~~
 - Implement shadow maps. (Low Priority)
 - Implement Beam Optimization as described in the Nvidia paper on pg. 13. (Low Priority)
