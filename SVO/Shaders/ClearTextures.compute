@@ -3,6 +3,7 @@
 RWTexture2D<float3> position_texture;
 RWTexture2D<float4> diffuse_texture;
 RWTexture2D<float3> normal_texture;
+RWTexture2D<float> shadow_texture;
 
 [numthreads(16,16,1)]
 void cs_main (uint3 id : SV_DispatchThreadID)
@@ -11,4 +12,5 @@ void cs_main (uint3 id : SV_DispatchThreadID)
     position_texture[id.xy] = float3(inf, inf, inf);
     diffuse_texture[id.xy] = float4(0.f, 0.f, 0.f, 0.f);
     normal_texture[id.xy] = float3(0.f, 0.f, 0.f);
+    shadow_texture[id.xy] = 1.f;
 }

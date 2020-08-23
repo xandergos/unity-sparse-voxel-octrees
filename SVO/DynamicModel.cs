@@ -12,8 +12,10 @@ namespace SVO
      */
     public class DynamicModel: Model
     {
-        private ComputeBuffer _computeBuffer;
-        private List<int> _bufferData = new List<int>(new[] {2 << 30});
+        private ComputeBuffer _primaryBuffer;
+        private ComputeBuffer _attribBuffer;
+        private List<int> _primaryBufferData = new List<int>(new[] {2 << 30});
+        private List<int> _attribBufferData = new List<int>(new[] {2 << 30});
         private bool _shouldUpdateBuffer;
         private readonly Queue<int> _freeMemoryPointers = new Queue<int>();
         
@@ -23,21 +25,23 @@ namespace SVO
 
         protected override void Awake()
         {
-            _computeBuffer = new ComputeBuffer(_bufferData.Count, 4);
-            _computeBuffer.SetData(_bufferData.ToArray());
+            _primaryBuffer = new ComputeBuffer(_primaryBufferData.Count, 4);
+            _primaryBuffer.SetData(_primaryBufferData.ToArray());
+            _attribBuffer = new ComputeBuffer(_attribBufferData.Count, 4);
+            _attribBuffer.SetData(_attribBufferData.ToArray());
             base.Awake();
         }
 
         private int GetVoxel(Vector3 pos)
         {
             int ptr = 0; // Root ptr
-            int type = (_bufferData[ptr] >> 30) & 3; // Type of root node
+            int type = (_primaryBufferData[ptr] >> 30) & 3; // Type of root node
             int stepDepth = 0;
             // Step down one depth until a non-ptr node is hit or the max depth is reached.
             while(type == 0)
             {
                 // Descend to the next branch
-                ptr = _bufferData[ptr];
+                ptr = _primaryBufferData[ptr];
                 
                 // Step to next node
                 stepDepth++;
@@ -48,18 +52,47 @@ namespace SVO
                 ptr += childIndex;
                 
                 // Get type of the node
-                type = (_bufferData[ptr] >> 30) & 3;
+                type = (_primaryBufferData[ptr] >> 30) & 3;
             }
-            return _bufferData[ptr];
+            return _primaryBufferData[ptr];
         }
 
-        public void SetVoxelColor(Vector3 position, int depth, Color color) 
-            => SetVoxel(position, depth, (1 << 30) | ((int)(color.r * 255) << 16) | 
-                                         ((int)(color.g * 255) << 8) | (int)(color.b * 255));
+        public void SetVoxelColor(Vector3 position, int depth, Color color, Vector3 normal)
+        {
+            var primaryData = 1 << 30;
+            primaryData |= ((int) (color.r * 255) << 16) | ((int) (color.g * 255) << 8) | (int) (color.b * 255);
 
-        public void DeleteVoxels(Vector3 position, int depth) => SetVoxel(position, depth, 2 << 30);
+            var attribData = 0;
+            var maxAbsComp = Mathf.Max(Mathf.Max(Mathf.Abs(normal.x), Mathf.Abs(normal.y)), Mathf.Abs(normal.z));
+            var cubicNormal = normal / maxAbsComp;
+            var cubicNormalUnorm = cubicNormal / 2f + new Vector3(.5f, .5f, .5f);
+            if (Mathf.Abs(normal.x) == maxAbsComp)
+            {
+                attribData |= ((Math.Sign(normal.x) + 1) / 2) << 22;
+                attribData |= (int)(1023f * cubicNormalUnorm.y) << 10;
+                attribData |= (int)(1023f * cubicNormalUnorm.z);
+            }
+            else if (Mathf.Abs(normal.y) == maxAbsComp)
+            {
+                attribData |= ((Math.Sign(normal.y) + 1) / 2) << 22;
+                attribData |= 1 << 20;
+                attribData |= (int)(1023f * cubicNormalUnorm.x) << 10;
+                attribData |= (int)(1023f * cubicNormalUnorm.z);
+            }
+            else if (Mathf.Abs(normal.z) == maxAbsComp)
+            {
+                attribData |= ((Math.Sign(normal.z) + 1) / 2) << 22;
+                attribData |= 2 << 20;
+                attribData |= (int)(1023f * cubicNormalUnorm.x) << 10;
+                attribData |= (int)(1023f * cubicNormalUnorm.y);
+            }
+            
+            SetVoxel(position, depth, primaryData, attribData);
+        }
 
-        private void SetVoxel(Vector3 position, int depth, int data)
+        public void DeleteVoxels(Vector3 position, int depth) => SetVoxel(position, depth, 2 << 30, 0);
+
+        private void SetVoxel(Vector3 position, int depth, int data, int attribData)
         {
             static int AsInt(float f) => BitConverter.ToInt32(BitConverter.GetBytes(f), 0);
             static int FirstSetHigh(int i) => (AsInt(i) >> 23) - 127;
@@ -73,12 +106,12 @@ namespace SVO
             int stepDepth = Math.Min(Math.Min(firstSet - 1, _ptrStackDepth), depth);
             
             int ptr = _ptrStack[stepDepth];
-            int type = (_bufferData[ptr] >> 30) & 3; // Type of root node
+            int type = (_primaryBufferData[ptr] >> 30) & 3; // Type of root node
             // Step down one depth until a non-ptr node is hit or the max depth is reached.
             while(type == 0 && stepDepth < depth)
             {
                 // Descend to the next branch
-                ptr = _bufferData[ptr];
+                ptr = _primaryBufferData[ptr];
                 
                 // Step to next node
                 stepDepth++;
@@ -90,22 +123,23 @@ namespace SVO
                 _ptrStack[stepDepth] = ptr;
                 
                 // Get type of the node
-                type = (_bufferData[ptr] >> 30) & 3;
+                type = (_primaryBufferData[ptr] >> 30) & 3;
             }
             _ptrStackDepth = stepDepth;
             _ptrStackPos = position;
 
             // Data can be compressed
             if (type == 0)
-                FreeMemory(_bufferData[ptr]);
+                FreeMemory(_primaryBufferData[ptr]);
 
-            var original = _bufferData[ptr];
+            var original = _primaryBufferData[ptr];
+            var originalAttrib = _attribBufferData[ptr];
             while (stepDepth < depth)
             {
                 stepDepth++;
                 // Create another branch to go down another depth
-                _bufferData[ptr] = AllocateBranch(original);
-                ptr = _bufferData[ptr];
+                _primaryBufferData[ptr] = AllocateBranch(original, originalAttrib);
+                ptr = _primaryBufferData[ptr];
                 
                 // Move to the position of the right child node.
                 int xm = (BitConverter.ToInt32(BitConverter.GetBytes(position.x), 0) >> (23 - stepDepth)) & 1;
@@ -114,9 +148,56 @@ namespace SVO
                 int childIndex = (xm << 2) + (ym << 1) + zm;
                 ptr += childIndex;
             }
-            _bufferData[ptr] = data;
+            _primaryBufferData[ptr] = data;
+            _attribBufferData[ptr] = attribData;
             
             _shouldUpdateBuffer = true;
+        }
+
+        public void Fill(Predicate<Bounds> branchCondition, Predicate<Bounds> voxelCondition, Color color)
+        {
+            var primaryData = 1 << 30;
+            primaryData |= ((int) (color.r * 255) << 16) | ((int) (color.g * 255) << 8) | (int) (color.b * 255);
+            
+            Vector3 size = Vector3.one;
+            Vector3 pos = Vector3.one;
+            if (((_primaryBufferData[0] >> 30) & 3) == 0)
+            {
+                if (branchCondition(new Bounds(pos + size / 2, size)))
+                {
+                    Fill(pos, 1, _primaryBufferData[0], branchCondition, voxelCondition, primaryData);
+                }
+            }
+            else if (((_primaryBufferData[0] >> 30) & 3) == 2 && voxelCondition.Invoke( new Bounds(pos + size / 2, size)))
+            {
+                _primaryBufferData[0] = primaryData;
+            }
+        }
+
+        private void Fill(Vector3 startPos, int depth, int startPtr, Predicate<Bounds> branchCondition, Predicate<Bounds> voxelCondition, int data)
+        {
+            static int AsInt(float f) => BitConverter.ToInt32(BitConverter.GetBytes(f), 0);
+            static float AsFloat(int i) => BitConverter.ToSingle(BitConverter.GetBytes(i), 0);
+            
+            Vector3 size = Vector3.one * (AsFloat(0x3f800000 + (1 << (23 - depth))) - 1f);
+            for (int i = 0; i < 8; i++)
+            {
+                Vector3 pos = startPos;
+                pos.x = AsFloat(AsInt(pos.x) | (((i >> 2) & 1) << (23 - depth)));
+                pos.y = AsFloat(AsInt(pos.y) | (((i >> 1) & 1) << (23 - depth)));
+                pos.z = AsFloat(AsInt(pos.z) | ((i & 1) << (23 - depth)));
+                if (((_primaryBufferData[startPtr + i] >> 30) & 3) == 0)
+                {
+                    if (branchCondition( new Bounds(pos + size / 2, size)))
+                    {
+                        Fill(pos, depth + 1, _primaryBufferData[startPtr + i], branchCondition, voxelCondition, data);
+                    }
+                }
+                else if (((_primaryBufferData[startPtr + i] >> 30) & 3) == 2 && voxelCondition.Invoke( new Bounds(pos + size / 2, size)))
+                {
+                    _primaryBufferData[startPtr + i] = data;
+                }
+            }
         }
 
         private void FreeMemory(int ptr)
@@ -124,13 +205,16 @@ namespace SVO
             _freeMemoryPointers.Enqueue(ptr);
         }
 
-        private int AllocateBranch(int defaultValue)
+        private int AllocateBranch(int defaultValue, int defaultAttribValue)
         {
             if (_freeMemoryPointers.Count != 0)
             {
                 var ptr = _freeMemoryPointers.Dequeue();
                 for (int i = 0; i < 8; i++)
-                    _bufferData[ptr + i] = defaultValue;
+                {
+                    _primaryBufferData[ptr + i] = defaultValue;
+                    _attribBufferData[ptr + i] = defaultAttribValue;
+                }
                 // Free child pointers
                 for (int i = 0; i < 8; i++)
                 {
@@ -141,34 +225,44 @@ namespace SVO
             }
             else
             {
-                var ptr = _bufferData.Count;
-                _bufferData.AddRange(new[]
+                var ptr = _primaryBufferData.Count;
+                _primaryBufferData.AddRange(new[]
                 {
                     defaultValue, defaultValue, defaultValue, defaultValue,
                     defaultValue, defaultValue, defaultValue, defaultValue
+                });
+                _attribBufferData.AddRange(new[]
+                {
+                    defaultAttribValue, defaultAttribValue, defaultAttribValue, defaultAttribValue,
+                    defaultAttribValue, defaultAttribValue, defaultAttribValue, defaultAttribValue
                 });
                 return ptr;
             }
         }
         
-        internal override void Render(ComputeShader shader, Camera camera, RenderTexture diffuseTexture, RenderTexture positionTexture, RenderTexture normalTexture)
+        internal override void Render(ComputeShader shader, Camera camera, RenderTexture diffuseTexture,
+            RenderTexture positionTexture, RenderTexture normalTexture)
         {
             if (_shouldUpdateBuffer)
             {
                 _shouldUpdateBuffer = false;
-                if (_bufferData.Count != _computeBuffer.count)
+                if (_primaryBufferData.Count != _primaryBuffer.count)
                 {
-                    _computeBuffer.Release();
-                    _computeBuffer = new ComputeBuffer(_bufferData.Count, 4);
+                    _primaryBuffer.Release();
+                    _primaryBuffer = new ComputeBuffer(_primaryBufferData.Count, 4);
+                    _attribBuffer.Release();
+                    _attribBuffer = new ComputeBuffer(_attribBufferData.Count, 4);
                 }
-                _computeBuffer.SetData(_bufferData.ToArray());
+                _primaryBuffer.SetData(_primaryBufferData);
+                _attribBuffer.SetData(_attribBufferData);
             }
             
             var threadGroupsX = Mathf.CeilToInt(Screen.width / 16.0f);
             var threadGroupsY = Mathf.CeilToInt(Screen.height / 16.0f);
             
             // Update Parameters
-            shader.SetBuffer(0, "octree_root", _computeBuffer);
+            shader.SetBuffer(0, "octree_primary_data", _primaryBuffer);
+            shader.SetBuffer(0, "octree_attrib_data", _attribBuffer);
             shader.SetTexture(0, "diffuse_texture", diffuseTexture);
             shader.SetTexture(0, "position_texture", positionTexture);
             shader.SetTexture(0, "normal_texture", normalTexture);
@@ -179,11 +273,50 @@ namespace SVO
             
             shader.Dispatch(0, threadGroupsX, threadGroupsY, 1);
         }
+		
+        internal override void MapShadows(ComputeShader shader, Camera camera, RenderTexture diffuseTexture, RenderTexture positionTexture,
+            RenderTexture normalTexture, RenderTexture shadowTexture, Vector3 sunDir)
+        {
+            if (_shouldUpdateBuffer)
+            {
+                if (_shouldUpdateBuffer)
+                {
+                    _shouldUpdateBuffer = false;
+                    if (_primaryBufferData.Count != _primaryBuffer.count)
+                    {
+                        _primaryBuffer.Release();
+                        _primaryBuffer = new ComputeBuffer(_primaryBufferData.Count, 4);
+                        _attribBuffer.Release();
+                        _attribBuffer = new ComputeBuffer(_attribBufferData.Count, 4);
+                    }
+                    _primaryBuffer.SetData(_primaryBufferData);
+                    _attribBuffer.SetData(_attribBufferData);
+                }
+            }
+            
+            var threadGroupsX = Mathf.CeilToInt(Screen.width / 16.0f);
+            var threadGroupsY = Mathf.CeilToInt(Screen.height / 16.0f);
+            
+            // Update Parameters
+            shader.SetBuffer(0, "octree_primary_data", _primaryBuffer);
+            shader.SetBuffer(0, "octree_attrib_data", _attribBuffer);
+            shader.SetTexture(0, "diffuse_texture", diffuseTexture);
+            shader.SetTexture(0, "position_texture", positionTexture);
+            shader.SetTexture(0, "normal_texture", normalTexture);
+            shader.SetTexture(0, "shadow_texture", shadowTexture);
+            shader.SetVector("sun_direction", sunDir);
+            shader.SetVector("octree_pos", transform.position);
+            shader.SetVector("octree_scale", transform.lossyScale);
+            shader.SetVector("cam_pos", camera.transform.position);
+            
+            shader.Dispatch(0, threadGroupsX, threadGroupsY, 1);
+        }
+
 
         private void OnDestroy()
         {
-            _computeBuffer.Release();
-            _bufferData = null;
+            _primaryBuffer.Release();
+            _primaryBufferData = null;
         }
     }
 }

@@ -11,5 +11,11 @@ namespace SVO
         {
             throw new System.NotImplementedException();
         }
+
+        internal override void MapShadows(ComputeShader shader, Camera camera, RenderTexture diffuseTexture, RenderTexture positionTexture,
+            RenderTexture normalTexture, RenderTexture shadowTexture, Vector3 sunDir)
+        {
+            throw new System.NotImplementedException();
+        }
     }
 }

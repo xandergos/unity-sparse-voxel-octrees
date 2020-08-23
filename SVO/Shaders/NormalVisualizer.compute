@@ -1,0 +1,23 @@
+﻿#pragma kernel cs_main
+
+RWTexture2D<float4> result_texture;
+RWTexture2D<float4> diffuse_texture;
+RWTexture2D<float3> position_texture;
+RWTexture2D<float3> normal_texture;
+RWTexture2D<float> shadow_texture;
+
+float mat_shininess;
+float mat_roughness;
+float3 sun_direction;
+float3 sun_diffuse;
+float3 sun_specular;
+
+float3 ambient_light;
+
+float3 cam_pos;
+
+[numthreads(16,16,1)]
+void cs_main(uint3 id : SV_DispatchThreadID)
+{
+    result_texture[id.xy] = float4(normal_texture[id.xy].xyz, 1.f);
+}

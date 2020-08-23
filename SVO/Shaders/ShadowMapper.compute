@@ -8,16 +8,18 @@
 RWTexture2D<float4> diffuse_texture;
 RWTexture2D<float3> position_texture;
 RWTexture2D<float3> normal_texture;
+RWTexture2D<float> shadow_texture;
 
 // Octree Data
 StructuredBuffer<int> octree_primary_data;
-StructuredBuffer<int> octree_attrib_data;
 
 // Camera data
-float4x4 camera_to_world;
-float4x4 camera_inverse_projection;
 float3 octree_pos;
 float3 octree_scale;
+
+float3 sun_direction;
+
+float3 cam_pos;
 
 struct ray
 {
@@ -32,41 +34,31 @@ struct ray_hit
     float3 normal;
 };
 
-ray create_camera_ray(float2 uv) 
-{
-    float3 origin = mul(camera_to_world, float4(0.0f, 0.0f, 0.0f, 1.0f)).xyz;
-    origin += octree_scale;
-    origin -= octree_pos;
-    origin /= octree_scale;
-    float3 direction = mul(camera_inverse_projection, float4(uv, 0.0f, 1.0f)).xyz;
-    
-    direction = mul(camera_to_world, float4(direction, 0.0f)).xyz;
-    direction /= octree_scale;
-    direction = normalize(direction);
-
-    ray ray;
-    ray.origin = origin;
-    ray.direction = direction;
-    
-    return ray;
-}
-
 [numthreads(16,16,1)]
 void cs_main(uint3 id : SV_DispatchThreadID)
 {
     static const int max_depth = 23;
     static const float epsilon = exp2(-max_depth);
     
-    // Dimensions of all but shadow textures
+    // Dimensions of all non-shadow textures
     uint width, height;
     diffuse_texture.GetDimensions(width, height);
 
-    // Transform pixel to [-1,1] range
-    float2 uv = float2((id.xy + float2(0.5f, 0.5f)) / float2(width, height) * 2.0f - 1.0f);
+    // Dimensions of shadow texture
+    uint shadow_tex_width, shadow_tex_height;
+    shadow_texture.GetDimensions(shadow_tex_width, shadow_tex_height);
 
-    // Get the ray from the camera
-    ray ray = create_camera_ray(uv);
+    uint3 scaled_id = uint3(width * id.x / shadow_tex_width, height * id.y / shadow_tex_height, 0);
 
+    ray ray;
+    ray.direction = -sun_direction;
+    ray.direction /= octree_scale;
+    ray.direction = normalize(ray.direction);
+    ray.origin = position_texture[scaled_id.xy] + normal_texture[scaled_id.xy] * 0.05f * octree_scale;
+    ray.origin += octree_scale;
+    ray.origin -= octree_pos;
+    ray.origin /= octree_scale;
+    
     // Mirror coordinate system such that all ray direction components are negative.
     int sign_mask = 0;
     if(ray.direction.x > 0.f) sign_mask ^= 4, ray.origin.x = 3.f - ray.origin.x;
@@ -80,20 +72,8 @@ void cs_main(uint3 id : SV_DispatchThreadID)
     float3 root_max_distances = (1.f - ray.origin) / ray.direction;
     float root_tmin = max(max(max(root_min_distances.x, root_min_distances.y), root_min_distances.z), 0);
     float root_tmax = min(min(root_max_distances.x, root_max_distances.y), root_max_distances.z);
-
-    float3 true_camera_pos = mul(camera_to_world, float4(0, 0, 0, 1)).xyz;
-    float3 root_world_intersect = ray.direction * root_tmin + ray.origin;
-    if(sign_mask >> 2 != 0) root_world_intersect.x = 3.f - root_world_intersect.x;
-    if(sign_mask >> 1 & 1 != 0) root_world_intersect.y = 3.f - root_world_intersect.y;
-    if(sign_mask & 1 != 0) root_world_intersect.z = 3.f - root_world_intersect.z;
-    root_world_intersect = (root_world_intersect - 1) * octree_scale + octree_pos;
-    float3 root_offset = root_world_intersect - true_camera_pos;
-    float root_dist_sqr = dot(root_offset, root_offset);
-
-    float3 last_pos_offset = position_texture[id.xy] - true_camera_pos;
-    float last_dist = dot(last_pos_offset, last_pos_offset);
     
-    if(root_tmax < 0 || root_tmin >= root_tmax || root_dist_sqr > last_dist) return;
+    if(root_tmax < 0 || root_tmin >= root_tmax || shadow_texture[id.xy] == 0.f) return;
     
     float3 next_path = clamp(ray.origin + ray.direction * root_tmin, 1.f, asfloat(0x3fffffff));
     
@@ -132,50 +112,7 @@ void cs_main(uint3 id : SV_DispatchThreadID)
         // DRAW if voxel is solid
         if(type == COLOR_VOXEL_TYPE)
         {
-            int data = octree_primary_data[ptr].x;
-            float4 color = float4((data >> 16 & 0xFF) / 255.f, (data >> 8 & 0xFF) / 255.f, (data & 0xFF) / 255.f, 1.f);
-            diffuse_texture[id.xy] = color;
-            
-            // Normals transformed to [0, 1] range
-            int attribs = octree_attrib_data[ptr];
-            int sign_bit = attribs >> 22 & 1;
-            int axis = attribs >> 20 & 3;
-            int comp2 = attribs >> 10 & 0x3FF;
-            int comp1 = attribs & 0x3FF;
-
-            float3 normal = float3(0, 0, 0);
-            switch(axis)
-            {
-                case 0:
-                    normal.x = sign_bit * 2.f - 1;
-                    normal.y = comp2 / 1023.f * 2.f - 1;
-                    normal.z = comp1 / 1023.f * 2.f - 1;
-                    break;
-                case 1:
-                    normal.x = comp2 / 1023.f * 2.f - 1;
-                    normal.y = sign_bit * 2.f - 1;
-                    normal.z = comp1 / 1023.f * 2.f - 1;
-                    break;
-                case 2:
-                    normal.x = comp2 / 1023.f * 2.f - 1;
-                    normal.y = comp1 / 1023.f * 2.f - 1;
-                    normal.z = sign_bit * 2.f - 1;
-                    break;
-            }
-            normal = normalize(normal);
-            normal /= 2.f;
-            normal += .5f;
-            normal_texture[id.xy] = normal;
-
-            // Undo coordinate mirroring in next_path
-            float3 mirrored_path = next_path;
-            if(sign_mask >> 2 != 0) mirrored_path.x = 3.f - next_path.x;
-            if(sign_mask >> 1 & 1 != 0) mirrored_path.y = 3.f - next_path.y;
-            if(sign_mask & 1 != 0) mirrored_path.z = 3.f - next_path.z;
-            
-            // Update textures. Coordinates are also transformed to world-space.
-            position_texture[id.xy] = (mirrored_path - 1) * octree_scale + octree_pos;
-            
+            shadow_texture[id.xy] = 0.f;
             break;
         }
 
