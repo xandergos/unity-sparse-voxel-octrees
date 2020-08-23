@@ -14,5 +14,4 @@ Any camera that renders SVOs must have the SvoRenderer script attached with the 
 
 - When a branch is changed, optimize it as well as its parent. (High Priority)
 - Make Octree rendering work alongside Unity's normal rendering system. (Low Priority)
-- Implement shadow maps. (Low Priority)
 - Implement Beam Optimization as described in the Nvidia paper on pg. 13. (Low Priority)
