@@ -10,6 +10,11 @@ Currently the only way to use the library is to download the files and compile t
 
 Any camera that renders SVOs must have the SvoRenderer script attached with the appropriate shaders attached.
 
+## Limitations
+
+- Deformations, such as vertex deformations commonly used to animate characters or other objects, are not implemented, and are not planned (If its even possible).
+- No collider support. Unlike normal meshes, there is no built-in collider for representing an Octree. Any octree-based object will need to be represented using an approximate collider. This is not a huge deal, as an approximate collider is generally the more performant approach with meshes anyways. Theoretically, an exact octree collider could be made by recreating the octree using box colliders, but this would be memory intensive, and implementation would take time, so this is not planned.
+
 ## TODO
 
 - When a branch is changed, optimize it as well as its parent. (High Priority)
