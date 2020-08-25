@@ -1,23 +1,6 @@
-﻿#pragma kernel cs_main
-
-#define POINTER_TYPE 0
+﻿#define POINTER_TYPE 0
 #define COLOR_VOXEL_TYPE 1
 #define EMPTY_VOXEL_TYPE 2
-
-// Textures
-RWTexture2D<float4> diffuse_texture;
-RWTexture2D<float3> position_texture;
-RWTexture2D<float3> normal_texture;
-
-// Octree Data
-StructuredBuffer<int> octree_primary_data;
-StructuredBuffer<int> octree_attrib_data;
-
-// Camera data
-float4x4 camera_to_world;
-float4x4 camera_inverse_projection;
-float3 octree_pos;
-float3 octree_scale;
 
 struct ray
 {
@@ -27,46 +10,36 @@ struct ray
 
 struct ray_hit
 {
-    float distance;
+    float4 color;
     float3 position;
     float3 normal;
 };
 
-ray create_camera_ray(float2 uv) 
+/* Casts a ray into an octree.
+ * Returns a ray_hit.
+ * If a voxel is hit, the ray_hit will have data describing the hit,
+ * otherwise, ray_hit will have a position of float3(-1, -1, -1).
+ * ray_hit normals and position are both in world pos.
+ * Note: ray.direction does not have to be normalized!
+ */
+ray_hit cast_ray(ray world_ray,
+    float3 octree_scale,
+    float3 octree_pos,
+    StructuredBuffer<int> octree_primary_data,
+    StructuredBuffer<int> octree_attrib_data)
 {
-    float3 origin = mul(camera_to_world, float4(0.0f, 0.0f, 0.0f, 1.0f)).xyz;
-    origin += octree_scale;
-    origin -= octree_pos;
-    origin /= octree_scale;
-    float3 direction = mul(camera_inverse_projection, float4(uv, 0.0f, 1.0f)).xyz;
-    
-    direction = mul(camera_to_world, float4(direction, 0.0f)).xyz;
-    direction /= octree_scale;
-    direction = normalize(direction);
+    ray_hit failed_ray_hit;
+    failed_ray_hit.position = float3(-1.f, -1.f, -1.f);
 
-    ray ray;
-    ray.origin = origin;
-    ray.direction = direction;
+    ray ray = world_ray;
+    ray.direction /= octree_scale;
+    ray.direction = normalize(ray.direction);
+    ray.origin += octree_scale * 1.5f;
+    ray.origin -= octree_pos;
+    ray.origin /= octree_scale;
     
-    return ray;
-}
-
-[numthreads(16,16,1)]
-void cs_main(uint3 id : SV_DispatchThreadID)
-{
     static const int max_depth = 23;
     static const float epsilon = exp2(-max_depth);
-    
-    // Dimensions of all but shadow textures
-    uint width, height;
-    diffuse_texture.GetDimensions(width, height);
-
-    // Transform pixel to [-1,1] range
-    float2 uv = float2((id.xy + float2(0.5f, 0.5f)) / float2(width, height) * 2.0f - 1.0f);
-
-    // Get the ray from the camera
-    ray ray = create_camera_ray(uv);
-
     // Mirror coordinate system such that all ray direction components are negative.
     int sign_mask = 0;
     if(ray.direction.x > 0.f) sign_mask ^= 4, ray.origin.x = 3.f - ray.origin.x;
@@ -80,20 +53,9 @@ void cs_main(uint3 id : SV_DispatchThreadID)
     float3 root_max_distances = (1.f - ray.origin) / ray.direction;
     float root_tmin = max(max(max(root_min_distances.x, root_min_distances.y), root_min_distances.z), 0);
     float root_tmax = min(min(root_max_distances.x, root_max_distances.y), root_max_distances.z);
-
-    float3 true_camera_pos = mul(camera_to_world, float4(0, 0, 0, 1)).xyz;
-    float3 root_world_intersect = ray.direction * root_tmin + ray.origin;
-    if(sign_mask >> 2 != 0) root_world_intersect.x = 3.f - root_world_intersect.x;
-    if(sign_mask >> 1 & 1 != 0) root_world_intersect.y = 3.f - root_world_intersect.y;
-    if(sign_mask & 1 != 0) root_world_intersect.z = 3.f - root_world_intersect.z;
-    root_world_intersect = (root_world_intersect - 1) * octree_scale + octree_pos;
-    float3 root_offset = root_world_intersect - true_camera_pos;
-    float root_dist_sqr = dot(root_offset, root_offset);
-
-    float3 last_pos_offset = position_texture[id.xy] - true_camera_pos;
-    float last_dist = dot(last_pos_offset, last_pos_offset);
     
-    if(root_tmax < 0 || root_tmin >= root_tmax || root_dist_sqr > last_dist) return;
+    if(root_tmax < 0 || root_tmin >= root_tmax)
+        return failed_ray_hit;
     
     float3 next_path = clamp(ray.origin + ray.direction * root_tmin, 1.f, asfloat(0x3fffffff));
     
@@ -101,7 +63,7 @@ void cs_main(uint3 id : SV_DispatchThreadID)
     stack[0] = 0;
     int stack_depth = 0;
     float3 stack_path = float3(1, 1, 1);
-    
+
     do
     {
         // GET voxel at targetPos
@@ -126,15 +88,15 @@ void cs_main(uint3 id : SV_DispatchThreadID)
             type = octree_primary_data[ptr].x >> 30 & 3;
         }
         stack_depth = depth;
-        next_path = asfloat(asint(next_path) & ~((1 << 23 - depth) - 1)); // Remove unused bits from next_path
-        stack_path = next_path;
+        stack_path = asfloat(asint(next_path) & ~((1 << 23 - depth) - 1)); // Remove unused bits
         
-        // DRAW if voxel is solid
+        // Return hit if voxel is solid
         if(type == COLOR_VOXEL_TYPE)
         {
+            ray_hit hit;
+            
             int data = octree_primary_data[ptr].x;
-            float4 color = float4((data >> 16 & 0xFF) / 255.f, (data >> 8 & 0xFF) / 255.f, (data & 0xFF) / 255.f, 1.f);
-            diffuse_texture[id.xy] = color;
+            hit.color = float4((data >> 16 & 0xFF) / 255.f, (data >> 8 & 0xFF) / 255.f, (data & 0xFF) / 255.f, 1.f);
             
             // Normals transformed to [0, 1] range
             int attribs = octree_attrib_data[ptr];
@@ -165,33 +127,34 @@ void cs_main(uint3 id : SV_DispatchThreadID)
             normal = normalize(normal);
             normal /= 2.f;
             normal += .5f;
-            normal_texture[id.xy] = normal;
+            hit.normal = normal;
 
             // Undo coordinate mirroring in next_path
             float3 mirrored_path = next_path;
+            //float size = exp2(-depth);
             if(sign_mask >> 2 != 0) mirrored_path.x = 3.f - next_path.x;
             if(sign_mask >> 1 & 1 != 0) mirrored_path.y = 3.f - next_path.y;
             if(sign_mask & 1 != 0) mirrored_path.z = 3.f - next_path.z;
+            hit.position = (mirrored_path - 1.5f) * octree_scale + octree_pos;
             
-            // Update textures. Coordinates are also transformed to world-space.
-            position_texture[id.xy] = (mirrored_path - 1) * octree_scale + octree_pos;
-            
-            break;
+            return hit;
         }
 
-        // Get ray hit on far side of voxel.
-        float x_far = next_path.x;
-        float y_far = next_path.y;
-        float z_far = next_path.z;
+        // Step to the next voxel by moving along the normal on the far side of the voxel that was hit.
+        float x_far = stack_path.x;
+        float y_far = stack_path.y;
+        float z_far = stack_path.z;
         float tx_max = (x_far - ray.origin.x) / ray.direction.x;
         float ty_max = (y_far - ray.origin.y) / ray.direction.y;
         float tz_max = (z_far - ray.origin.z) / ray.direction.z;
         float t_max = min(min(tx_max, ty_max), tz_max);
-        next_path = clamp(ray.origin + ray.direction * t_max, next_path, asfloat(asint(next_path) + (1 << 23 - depth) - 1));
+        next_path = clamp(ray.origin + ray.direction * t_max, stack_path, asfloat(asint(stack_path) + (1 << 23 - depth) - 1));
 
         if(tx_max <= t_max) next_path.x = x_far - epsilon;
         if(ty_max <= t_max) next_path.y = y_far - epsilon;
         if(tz_max <= t_max) next_path.z = z_far - epsilon;
     }
     while(all((asint(next_path) & 0xFF800000) == 0x3f800000));
+
+    return failed_ray_hit;
 }

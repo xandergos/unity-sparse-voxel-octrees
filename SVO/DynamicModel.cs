@@ -10,26 +10,28 @@ namespace SVO
      * Dynamic models have to store a copy of their data on the CPU, and must be sent to the GPU when a change is
      * made.
      */
-    public class DynamicModel: Model
+    public class DynamicModel: MonoBehaviour
     {
         private ComputeBuffer _primaryBuffer;
         private ComputeBuffer _attribBuffer;
-        private List<int> _primaryBufferData = new List<int>(new[] {2 << 30});
-        private List<int> _attribBufferData = new List<int>(new[] {2 << 30});
+        private readonly List<int> _primaryBufferData = new List<int>(new[] {2 << 30});
+        private readonly List<int> _attribBufferData = new List<int>(new[] {2 << 30});
         private bool _shouldUpdateBuffer;
         private readonly Queue<int> _freeMemoryPointers = new Queue<int>();
         
         private readonly int[] _ptrStack = new int[24];
         private Vector3 _ptrStackPos = Vector3.zero;
         private int _ptrStackDepth;
+        private static readonly int OctreePrimaryData = Shader.PropertyToID("octree_primary_data");
+        private static readonly int OctreeAttribData = Shader.PropertyToID("octree_attrib_data");
+        private static readonly int Initialized = Shader.PropertyToID("initialized");
 
-        protected override void Awake()
+        private void Awake()
         {
             _primaryBuffer = new ComputeBuffer(_primaryBufferData.Count, 4);
             _primaryBuffer.SetData(_primaryBufferData.ToArray());
             _attribBuffer = new ComputeBuffer(_attribBufferData.Count, 4);
             _attribBuffer.SetData(_attribBufferData.ToArray());
-            base.Awake();
         }
 
         private int GetVoxel(Vector3 pos)
@@ -240,9 +242,9 @@ namespace SVO
             }
         }
         
-        internal override void Render(ComputeShader shader, Camera camera, RenderTexture diffuseTexture,
-            RenderTexture positionTexture, RenderTexture normalTexture)
+        private void OnWillRenderObject()
         {
+            var material = GetComponent<Renderer>().material;
             if (_shouldUpdateBuffer)
             {
                 _shouldUpdateBuffer = false;
@@ -257,66 +259,16 @@ namespace SVO
                 _attribBuffer.SetData(_attribBufferData);
             }
             
-            var threadGroupsX = Mathf.CeilToInt(Screen.width / 16.0f);
-            var threadGroupsY = Mathf.CeilToInt(Screen.height / 16.0f);
-            
             // Update Parameters
-            shader.SetBuffer(0, "octree_primary_data", _primaryBuffer);
-            shader.SetBuffer(0, "octree_attrib_data", _attribBuffer);
-            shader.SetTexture(0, "diffuse_texture", diffuseTexture);
-            shader.SetTexture(0, "position_texture", positionTexture);
-            shader.SetTexture(0, "normal_texture", normalTexture);
-            shader.SetMatrix("camera_to_world", camera.cameraToWorldMatrix);
-            shader.SetMatrix("camera_inverse_projection", camera.projectionMatrix.inverse);
-            shader.SetVector("octree_pos", transform.position);
-            shader.SetVector("octree_scale", transform.lossyScale);
-            
-            shader.Dispatch(0, threadGroupsX, threadGroupsY, 1);
+            material.SetBuffer(OctreePrimaryData, _primaryBuffer);
+            material.SetBuffer(OctreeAttribData, _attribBuffer);
+            material.SetInt(Initialized, 1);
         }
-		
-        internal override void MapShadows(ComputeShader shader, Camera camera, RenderTexture diffuseTexture, RenderTexture positionTexture,
-            RenderTexture normalTexture, RenderTexture shadowTexture, Vector3 sunDir)
-        {
-            if (_shouldUpdateBuffer)
-            {
-                if (_shouldUpdateBuffer)
-                {
-                    _shouldUpdateBuffer = false;
-                    if (_primaryBufferData.Count != _primaryBuffer.count)
-                    {
-                        _primaryBuffer.Release();
-                        _primaryBuffer = new ComputeBuffer(_primaryBufferData.Count, 4);
-                        _attribBuffer.Release();
-                        _attribBuffer = new ComputeBuffer(_attribBufferData.Count, 4);
-                    }
-                    _primaryBuffer.SetData(_primaryBufferData);
-                    _attribBuffer.SetData(_attribBufferData);
-                }
-            }
-            
-            var threadGroupsX = Mathf.CeilToInt(Screen.width / 16.0f);
-            var threadGroupsY = Mathf.CeilToInt(Screen.height / 16.0f);
-            
-            // Update Parameters
-            shader.SetBuffer(0, "octree_primary_data", _primaryBuffer);
-            shader.SetBuffer(0, "octree_attrib_data", _attribBuffer);
-            shader.SetTexture(0, "diffuse_texture", diffuseTexture);
-            shader.SetTexture(0, "position_texture", positionTexture);
-            shader.SetTexture(0, "normal_texture", normalTexture);
-            shader.SetTexture(0, "shadow_texture", shadowTexture);
-            shader.SetVector("sun_direction", sunDir);
-            shader.SetVector("octree_pos", transform.position);
-            shader.SetVector("octree_scale", transform.lossyScale);
-            shader.SetVector("cam_pos", camera.transform.position);
-            
-            shader.Dispatch(0, threadGroupsX, threadGroupsY, 1);
-        }
-
 
         private void OnDestroy()
         {
             _primaryBuffer.Release();
-            _primaryBufferData = null;
+            _attribBuffer.Release();
         }
     }
 }
