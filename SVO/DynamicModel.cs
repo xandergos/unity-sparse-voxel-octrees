@@ -59,6 +59,13 @@ namespace SVO
             return _primaryBufferData[ptr];
         }
 
+		/**
+		Sets the color (and normal) at the specified position and depth.
+		position: The position of the voxel in the Octrees local space. This can be represented as a cube with center 1.5 and size 1. The locations are odd for performance purposes.
+		depth: The depth of the voxel. A depth of 1 would mean the voxel's size is 1/2, a depth of 3 would mean a size of 1/8th. In general, the size of a voxel with depth n has size 2^(-n). Minimum depth is 1.
+		color: The color of the voxel.
+		normal: The voxels normal.
+		*/
         public void SetVoxelColor(Vector3 position, int depth, Color color, Vector3 normal)
         {
             var primaryData = 1 << 30;
