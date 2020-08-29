@@ -6,9 +6,9 @@ A new, currently in-development method of rendering voxels using Sparse Voxel Oc
 
 Currently the only way to use the library is to download the files and compile them yourself in unity.
 
-## Setup
+## QuickStart
 
-Any camera that renders SVOs must have the SvoRenderer script attached with the appropriate shaders attached.
+Currently StaticModel is not implemented. This will be done after DynamicModel is complete. Until then, you can start by attaching a DynamicModel and OctreeMaterial to a GameObject. The DynamicModel component can then be edited from a script. The SetVoxelColor() method is ideal for this. Refer to the SetVoxelColor() documentation for usage information.
 
 ## Limitations
 
