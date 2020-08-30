@@ -3,13 +3,7 @@ using UnityEngine;
 
 namespace SVO
 {
-    /**
-     * Model that can be changed at runtime. Good for voxel, minecraft-like terrain.
-     * Its recommended that these models generally stay at a depth of about 7 or less, although at times can go up as high as 10.
-     * Dynamic models have to store a copy of their data on the CPU, and must be sent to the GPU when a change is
-     * made.
-     */
-    public class DynamicModel: MonoBehaviour
+    public class OctreeModel: MonoBehaviour
     {
         private ComputeBuffer _structureBuffer;
         private ComputeBuffer _shadingBuffer;

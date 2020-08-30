@@ -29,7 +29,7 @@ namespace SVO
             }
         }
 
-        public static OctreeData FromMesh(Mesh mesh, int depth, int submesh=0)
+        public static OctreeData FromMesh(Mesh mesh, int depth, bool autoTransform, Func<Bounds, Color> color, int submesh=0)
         {
             var data = new OctreeData();
 
@@ -39,7 +39,7 @@ namespace SVO
                 {
                     if (depth == fillDepth)
                     {
-                        data.SetSolidVoxel(bounds.min, depth, VoxelAttribute.Encode(Color.white, normal));
+                        data.SetSolidVoxel(bounds.min, depth, VoxelAttribute.Encode(color(bounds), normal));
                     }
                     else
                     {
@@ -55,8 +55,9 @@ namespace SVO
                 }
             }
             
-            var scale = new Vector3(.5f, .5f, .5f);
-            scale.Scale(new Vector3(1/mesh.bounds.extents.x, 1/mesh.bounds.extents.y, 1/mesh.bounds.extents.z));
+            var scaleVec = new Vector3(.5f, .5f, .5f);
+            scaleVec.Scale(new Vector3(1/mesh.bounds.extents.x, 1/mesh.bounds.extents.y, 1/mesh.bounds.extents.z));
+            var scale = Mathf.Min(Mathf.Min(scaleVec.x, scaleVec.y), scaleVec.z);
             
             var vertices = mesh.vertices;
             var indices = mesh.GetIndices(submesh);
@@ -64,15 +65,25 @@ namespace SVO
 
             for (var i = 0; i < indices.Length; i += 3)
             {
-                var normal = normals[i];
-                Vector3[] triVerts = {
-                    vertices[indices[i]] - mesh.bounds.center,
-                    vertices[indices[i + 1]] - mesh.bounds.center,
-                    vertices[indices[i + 2]] - mesh.bounds.center
-                };
+                var normal = normals[indices[i]];
+                Vector3[] triVerts;
+                if (autoTransform)
+                    triVerts = new[]
+                    {
+                        vertices[indices[i]] - mesh.bounds.center,
+                        vertices[indices[i + 1]] - mesh.bounds.center,
+                        vertices[indices[i + 2]] - mesh.bounds.center
+                    };
+                else
+                    triVerts = new[]
+                    {
+                        vertices[indices[i]],
+                        vertices[indices[i + 1]],
+                        vertices[indices[i + 2]]
+                    };
                 for (var j = 0; j < 3; j++)
                 {
-                    triVerts[j].Scale(scale);
+                    if(autoTransform) triVerts[j] *= scale;
                     triVerts[j] += new Vector3(1.5f, 1.5f, 1.5f);
                 }
                 
