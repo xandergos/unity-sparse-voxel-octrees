@@ -1,6 +1,5 @@
 ﻿#define POINTER_TYPE 0
-#define COLOR_VOXEL_TYPE 1
-#define EMPTY_VOXEL_TYPE 2
+#define VOXEL_TYPE 1
 
 struct ray
 {
@@ -73,7 +72,7 @@ ray_hit cast_ray(ray world_ray,
         int first_set = 23 - firstbithigh(differing_bits);
         int depth = min(first_set - 1, stack_depth);
         int ptr = stack[depth];
-        int type = octree_primary_data[ptr].x >> 30 & 3;
+        int type = octree_primary_data[ptr].x >> 31 & 1;
         while(type == POINTER_TYPE)
         {
             ptr = octree_primary_data[ptr].x;
@@ -85,25 +84,27 @@ ray_hit cast_ray(ray world_ray,
             child_index ^= sign_mask;
             ptr += child_index;
             stack[depth] = ptr;
-            type = octree_primary_data[ptr].x >> 30 & 3;
+            type = octree_primary_data[ptr].x >> 31 & 1;
         }
         stack_depth = depth;
         stack_path = asfloat(asint(next_path) & ~((1 << 23 - depth) - 1)); // Remove unused bits
         
         // Return hit if voxel is solid
-        if(type == COLOR_VOXEL_TYPE)
+        if(type == VOXEL_TYPE && octree_primary_data[ptr] != 1 << 31)
         {
             ray_hit hit;
+
+            int shading_ptr = octree_primary_data[ptr] & 0x7FFFFFFF;
             
-            int data = octree_primary_data[ptr].x;
-            hit.color = float4((data >> 16 & 0xFF) / 255.f, (data >> 8 & 0xFF) / 255.f, (data & 0xFF) / 255.f, 1.f);
+            int color_data = octree_attrib_data[shading_ptr];
+            hit.color = float4((color_data >> 16 & 0xFF) / 255.f, (color_data >> 8 & 0xFF) / 255.f, (color_data & 0xFF) / 255.f, 1.f);
             
             // Normals transformed to [0, 1] range
-            int attribs = octree_attrib_data[ptr];
-            int sign_bit = attribs >> 22 & 1;
-            int axis = attribs >> 20 & 3;
-            int comp2 = attribs >> 10 & 0x3FF;
-            int comp1 = attribs & 0x3FF;
+            int normal_data = octree_attrib_data[shading_ptr + 1];
+            int sign_bit = normal_data >> 22 & 1;
+            int axis = normal_data >> 20 & 3;
+            int comp2 = normal_data >> 10 & 0x3FF;
+            int comp1 = normal_data & 0x3FF;
 
             float3 normal = float3(0, 0, 0);
             switch(axis)
