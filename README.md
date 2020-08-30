@@ -8,7 +8,7 @@ Currently the only way to use the library is to download the files and compile t
 
 ## QuickStart
 
-Currently StaticModel is not implemented. This will be done after DynamicModel is complete. Until then, you can start by attaching a DynamicModel and OctreeMaterial to a GameObject. The DynamicModel component can then be edited from a script. The SetVoxelColor() method is ideal for this. Refer to the SetVoxelColor() documentation for usage information.
+Attach OctreeModel to a GameObject. The model can be edited from a script by using the SetData() method along with the OctreeData class. The OctreeModel can be rendered by creating a material which uses the Custom/Octree shader.
 
 ## Limitations
 
@@ -18,5 +18,3 @@ Currently StaticModel is not implemented. This will be done after DynamicModel i
 ## TODO
 
 - When a branch is changed, optimize it as well as its parent. (High Priority)
-- Make Octree rendering work alongside Unity's normal rendering system. (Low Priority)
-- Implement Beam Optimization as described in the Nvidia paper on pg. 13. (Low Priority)
