@@ -2,6 +2,7 @@
 {
     Properties
     {
+        _Shininess ("Shininess", Range(0, 1))=1
     }
     SubShader
     {
@@ -22,6 +23,8 @@
             uniform StructuredBuffer<int> octree_primary_data;
             uniform StructuredBuffer<int> octree_attrib_data;
             uniform int initialized = 0;
+
+            float _Shininess;
 
             struct v2f
             {
@@ -68,19 +71,25 @@
                 float3 objectWorldPos = unity_ObjectToWorld._m03_m13_m23;
 
                 ray_hit ray_hit = cast_ray(ray, i.worldScale, objectWorldPos, octree_primary_data, octree_attrib_data);
-                if(ray_hit.position.x != -1.f)
+                if(ray_hit.world_position.x != -1.f)
                 {
                     half light0Strength = max(0, dot(ray_hit.normal, _WorldSpaceLightPos0.xyz));
-                    o.color = ray_hit.color * light0Strength;
-                    o.color.rgb += ShadeSH3Order(half4(ray_hit.normal ,1));
-                    float4 clipPos = mul(UNITY_MATRIX_VP, float4(ray_hit.position, 1.0));
 
-                    o.depth = clipPos.z / clipPos.w;
+                    float3 world_view_dir = normalize(UnityWorldSpaceViewDir(ray_hit.world_position));
+                    float3 world_refl = reflect(-world_view_dir, ray_hit.normal);
+                    half3 spec = float3(1.f, 1.f, 1.f) * _Shininess * pow(max(0, dot(world_refl, _WorldSpaceLightPos0.xyz)), 32);
+                    
+                    o.color = ray_hit.color * light0Strength;
+                    o.color.rgb += ShadeSH3Order(half4(ray_hit.normal, 1));
+                    o.color.rgb += spec;
+                    float4 clip_pos = mul(UNITY_MATRIX_VP, float4(ray_hit.world_position, 1.0));
+
+                    o.depth = clip_pos.z / clip_pos.w;
                     #if defined(SHADER_API_GLCORE) || defined(SHADER_API_OPENGL) || \
                         defined(SHADER_API_GLES) ||  defined(SHADER_API_GLES3)
                         o.depth = (o.depth + 1.0) * 0.5;
                     #endif
-
+                    
                     clip(1.f);
                     return o;
                 }

@@ -10,7 +10,7 @@ struct ray
 struct ray_hit
 {
     float4 color;
-    float3 position;
+    float3 world_position;
     float3 normal;
 };
 
@@ -28,7 +28,7 @@ ray_hit cast_ray(ray world_ray,
     StructuredBuffer<int> octree_attrib_data)
 {
     ray_hit failed_ray_hit;
-    failed_ray_hit.position = float3(-1.f, -1.f, -1.f);
+    failed_ray_hit.world_position = float3(-1.f, -1.f, -1.f);
 
     ray ray = world_ray;
     ray.direction /= octree_scale;
@@ -126,8 +126,6 @@ ray_hit cast_ray(ray world_ray,
                     break;
             }
             normal = normalize(normal);
-            normal /= 2.f;
-            normal += .5f;
             hit.normal = normal;
 
             // Undo coordinate mirroring in next_path
@@ -136,7 +134,7 @@ ray_hit cast_ray(ray world_ray,
             if(sign_mask >> 2 != 0) mirrored_path.x = 3.f - next_path.x;
             if(sign_mask >> 1 & 1 != 0) mirrored_path.y = 3.f - next_path.y;
             if(sign_mask & 1 != 0) mirrored_path.z = 3.f - next_path.z;
-            hit.position = (mirrored_path - 1.5f) * octree_scale + octree_pos;
+            hit.world_position = (mirrored_path - 1.5f) * octree_scale + octree_pos;
             
             return hit;
         }

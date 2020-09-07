@@ -8,7 +8,7 @@ namespace SVO
         public static int[] Encode(Color color, Vector3 normal)
         {
             int[] data = new int[2];
-            data[0] |= 0b1100_0000;
+            data[0] |= 0b1100_0000 << 24;
             data[0] |= EncodeColor(color);
             data[1] = EncodeNormal(normal);
             return data;
@@ -19,7 +19,7 @@ namespace SVO
             var encoded = 0;
             var maxAbsComp = Mathf.Max(Mathf.Max(Mathf.Abs(normal.x), Mathf.Abs(normal.y)), Mathf.Abs(normal.z));
             var cubicNormal = normal / maxAbsComp;
-            var cubicNormalUnorm = cubicNormal / 2f + new Vector3(.5f, .5f, .5f);
+            var cubicNormalUnorm = cubicNormal * .5f + new Vector3(.5f, .5f, .5f);
             if (Mathf.Abs(normal.x) == maxAbsComp)
             {
                 encoded |= ((Math.Sign(normal.x) + 1) / 2) << 22;
@@ -47,9 +47,9 @@ namespace SVO
         private static int EncodeColor(Color color)
         {
             var encoded = 0;
-            encoded |= (byte)(color.r * 255) << 16;
-            encoded |= (byte)(color.g * 255) << 8;
-            encoded |= (byte)(color.b * 255) << 0;
+            encoded |= (int)(color.r * 255) << 16;
+            encoded |= (int)(color.g * 255) << 8;
+            encoded |= (int)(color.b * 255) << 0;
             return encoded;
         }
     }

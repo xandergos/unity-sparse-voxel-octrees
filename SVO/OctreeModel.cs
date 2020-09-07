@@ -11,17 +11,25 @@ namespace SVO
         private static readonly int OctreePrimaryData = Shader.PropertyToID("octree_primary_data");
         private static readonly int OctreeAttribData = Shader.PropertyToID("octree_attrib_data");
         private static readonly int Initialized = Shader.PropertyToID("initialized");
+
+        private OctreeData _initialData;
         
         public void Awake()
         {
             _structureBuffer = new ComputeBuffer(1, 4);
-            _structureBuffer.SetData(new[] { 1 << 31 });
             _shadingBuffer = new ComputeBuffer(1, 4);
-            _shadingBuffer.SetData(new[] { 0 });
+            if(_initialData != null) SetData(_initialData);
+            _initialData = null;
         }
 
         public void SetData(OctreeData data)
         {
+            if (_structureBuffer == null)
+            {
+                _initialData = data;
+                return;
+            }
+            
             if (_structureBuffer.count != data.StructureData.Count)
             {
                 _structureBuffer.Release();
