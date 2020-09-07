@@ -322,7 +322,7 @@ namespace SVO
                     
                     // Normals transformed to [0, 1] range
                     int normalData = ShadingData[shadingPtr + 1];
-                    int signBit = normalData >> 22 & 1;
+                    int normalSignBit = normalData >> 22 & 1;
                     int axis = normalData >> 20 & 3;
                     int comp2 = normalData >> 10 & 0x3FF;
                     int comp1 = normalData & 0x3FF;
@@ -331,19 +331,19 @@ namespace SVO
                     switch(axis)
                     {
                         case 0:
-                            normal.x = signBit * 2f - 1;
+                            normal.x = normalSignBit * 2f - 1;
                             normal.y = comp2 / 1023f * 2f - 1;
                             normal.z = comp1 / 1023f * 2f - 1;
                             break;
                         case 1:
                             normal.x = comp2 / 1023f * 2f - 1;
-                            normal.y = signBit * 2f - 1;
+                            normal.y = normalSignBit * 2f - 1;
                             normal.z = comp1 / 1023f * 2f - 1;
                             break;
                         case 2:
                             normal.x = comp2 / 1023f * 2f - 1;
                             normal.y = comp1 / 1023f * 2f - 1;
-                            normal.z = signBit * 2f - 1;
+                            normal.z = normalSignBit * 2f - 1;
                             break;
                     }
                     normal.Normalize();
@@ -376,7 +376,7 @@ namespace SVO
                         {
                             hit.OctreePosition.x = 3f - hit.OctreePosition.x;
                         }
-                        hit.FaceNormal.x = (signBit & 4) == 0 ? hit.FaceNormal.x = 1 : hit.FaceNormal.x = -1;
+                        hit.FaceNormal.x = (signMask & 4) == 0 ? 1 : -1;
                     }
                     else if (tyMin >= tMin)
                     {
@@ -385,7 +385,7 @@ namespace SVO
                         {
                             hit.OctreePosition.y = 3f - hit.OctreePosition.y;
                         }
-                        hit.FaceNormal.y = (signBit & 2) == 0 ? hit.FaceNormal.y = 1 : hit.FaceNormal.y = -1;
+                        hit.FaceNormal.y = (signMask & 2) == 0 ? 1 : -1;
                     }
                     else if (tzMin >= tMin)
                     {
@@ -394,7 +394,7 @@ namespace SVO
                         {
                             hit.OctreePosition.z = 3f - hit.OctreePosition.z;
                         }
-                        hit.FaceNormal.z = (signBit & 1) == 0 ? hit.FaceNormal.z = 1 : hit.FaceNormal.z = -1;
+                        hit.FaceNormal.z = (signMask & 1) == 0 ? 1 : -1;
                     }
                     
                     return hit;
