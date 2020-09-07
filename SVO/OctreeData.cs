@@ -1,32 +1,64 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Runtime.Serialization.Formatters.Binary;
 using UnityEngine;
 
 namespace SVO
 {
     public class OctreeData
     {
-        private class DataPacked
+        public static OctreeData Load(String filePath)
         {
-            public List<int> StructureData;
-            public List<int> ShadingData;
-            public Queue<int> FreeStructureMemory;
-            public List<int> FreeShadingMemory;
-        }
-        
-        public static OctreeData Load(FileStream fstream)
-        {
-            var bf = new BinaryFormatter();
-            var dataPacked = (DataPacked) bf.Deserialize(fstream);
-            return new OctreeData
+            var fstream = File.OpenRead(filePath);
+            
+            var structureData = new List<int>();
+            var shadingData = new List<int>();
+            var freeStructureMemory = new Queue<int>();
+            var freeShadingMemory = new List<int>();
+            
+            var buffer = new byte[4];
+            fstream.Read(buffer, 0, 4);
+            var s = BitConverter.ToInt32(buffer, 0);
+            structureData.Capacity = Mathf.NextPowerOfTwo(s);
+            for (var j = 0; j < s; j++)
             {
-                FreeShadingMemory = dataPacked.FreeShadingMemory,
-                FreeStructureMemory = dataPacked.FreeStructureMemory,
-                ShadingData = dataPacked.ShadingData,
-                StructureData = dataPacked.StructureData
-            };
+                fstream.Read(buffer, 0, 4);
+                var n = BitConverter.ToInt32(buffer, 0);
+                structureData.Add(n);
+            }
+            
+            fstream.Read(buffer, 0, 4);
+            s = BitConverter.ToInt32(buffer, 0);
+            shadingData.Capacity = Mathf.NextPowerOfTwo(s);
+            for (var j = 0; j < s; j++)
+            {
+                fstream.Read(buffer, 0, 4);
+                var n = BitConverter.ToInt32(buffer, 0);
+                shadingData.Add(n);
+            }
+            
+            fstream.Read(buffer, 0, 4);
+            s = BitConverter.ToInt32(buffer, 0);
+            for (var j = 0; j < s; j++)
+            {
+                fstream.Read(buffer, 0, 4);
+                var n = BitConverter.ToInt32(buffer, 0);
+                freeStructureMemory.Enqueue(n);
+            }
+            
+            fstream.Read(buffer, 0, 4);
+            s = BitConverter.ToInt32(buffer, 0);
+            freeShadingMemory.Capacity = Mathf.NextPowerOfTwo(s);
+            for (var j = 0; j < s; j++)
+            {
+                fstream.Read(buffer, 0, 4);
+                var n = BitConverter.ToInt32(buffer, 0);
+                freeShadingMemory.Add(n);
+            }
+            
+            fstream.Dispose();
+            
+            return new OctreeData(structureData, shadingData, freeStructureMemory, freeShadingMemory);
         }
         
         private static readonly byte[] ShadingDataSizeTable = new byte[256];
@@ -127,10 +159,13 @@ namespace SVO
             _ptrStack[0] = 0;
         }
 
-        internal OctreeData(List<int> structureData, List<int> shadingData)
+        internal OctreeData(List<int> structureData, List<int> shadingData, 
+            Queue<int> freeStructureMemory, List<int> freeShadingMemory)
         {
             StructureData = structureData;
             ShadingData = shadingData;
+            FreeStructureMemory = freeStructureMemory;
+            FreeShadingMemory = freeShadingMemory;
         }
 
         /**
@@ -446,17 +481,28 @@ namespace SVO
             return endPtr;
         }
         
-        public void Save(FileStream fstream)
+        public void Save(String filePath)
         {
-            var bf = new BinaryFormatter();
-            var packed = new DataPacked
-            {
-                ShadingData = ShadingData,
-                StructureData = StructureData,
-                FreeShadingMemory = FreeShadingMemory,
-                FreeStructureMemory = FreeStructureMemory
-            };
-            bf.Serialize(fstream, packed);
+            var fstream = File.OpenWrite(filePath);
+            
+            fstream.Write(BitConverter.GetBytes(StructureData.Count), 0, 4);
+            foreach (var n in StructureData)
+                fstream.Write(BitConverter.GetBytes(n), 0, 4);
+
+            fstream.Write(BitConverter.GetBytes(ShadingData.Count), 0, 4);
+            foreach (var n in ShadingData)
+                fstream.Write(BitConverter.GetBytes(n), 0, 4);
+
+            fstream.Write(BitConverter.GetBytes(FreeStructureMemory.Count), 0, 4);
+            foreach (var n in FreeStructureMemory)
+                fstream.Write(BitConverter.GetBytes(n), 0, 4);
+
+            fstream.Write(BitConverter.GetBytes(FreeShadingMemory.Count), 0, 4);
+            foreach (var n in FreeShadingMemory)
+                fstream.Write(BitConverter.GetBytes(n), 0, 4);
+            
+            fstream.Flush();
+            fstream.Dispose();
         }
     }
 }

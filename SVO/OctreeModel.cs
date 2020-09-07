@@ -11,6 +11,9 @@ namespace SVO
         private static readonly int OctreePrimaryData = Shader.PropertyToID("octree_primary_data");
         private static readonly int OctreeAttribData = Shader.PropertyToID("octree_attrib_data");
         private static readonly int Initialized = Shader.PropertyToID("initialized");
+        
+        internal Queue<int> FreeStructureMemoryCache = new Queue<int>();
+        internal List<int> FreeShadingMemoryCached = new List<int>();
 
         private OctreeData _initialData;
         
@@ -24,6 +27,9 @@ namespace SVO
 
         public void SetData(OctreeData data)
         {
+            FreeShadingMemoryCached = data.FreeShadingMemory;
+            FreeStructureMemoryCache = data.FreeStructureMemory;
+            
             if (_structureBuffer == null)
             {
                 _initialData = data;
@@ -55,7 +61,8 @@ namespace SVO
             _structureBuffer.GetData(shadingData);
             var shadingDataList = new List<int>(shadingData);
             
-            return new OctreeData(structureDataList, shadingDataList);
+            return new OctreeData(structureDataList, shadingDataList, 
+                FreeStructureMemoryCache, FreeShadingMemoryCached);
         }
 
         private void OnWillRenderObject()
