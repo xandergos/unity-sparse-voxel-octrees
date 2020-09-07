@@ -17,4 +17,4 @@ Attach OctreeModel to a GameObject. The model can be edited from a script by usi
 
 ## TODO
 
-- When a branch is changed, optimize it as well as its parent. (High Priority)
+- When a branch is changed, optimize it as well as its parent.
