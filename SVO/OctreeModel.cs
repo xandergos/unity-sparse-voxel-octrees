@@ -19,7 +19,7 @@ namespace SVO
 
         private void Update()
         {
-            if (data is null) return;
+            if (data == null) return;
             if (_lastUpdateIndex != data.UpdateIndex)
             {
                 _lastUpdateIndex = data.UpdateIndex;
@@ -29,7 +29,6 @@ namespace SVO
 
         private void ReloadBuffers()
         {
-            if (data is null) return;
             if (_structureBuffer?.count != data.structureData.Count)
             {
                 _structureBuffer?.Release();

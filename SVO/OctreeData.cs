@@ -56,7 +56,7 @@ namespace SVO
             internalAttributes[0] |= (int)(color.b * 255) << 0;
             for (var i = 0; i < attributes.Length; i++) internalAttributes[i + 1] = attributes[i];
 
-            UpdateIndex = (ulong)Random.Range(int.MinValue, int.MaxValue) << 32 | (ulong)Random.Range(int.MinValue, int.MaxValue);
+            UpdateIndex = ((ulong)Random.Range(int.MinValue, int.MaxValue) << 32) | (ulong)Random.Range(int.MinValue, int.MaxValue);
             
             Debug.Assert(position.x < 2 && position.x >= 1);
             Debug.Assert(position.y < 2 && position.y >= 1);
