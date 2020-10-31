@@ -1,156 +1,29 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using JetBrains.Annotations;
 using UnityEngine;
+using Random = UnityEngine.Random;
 
 namespace SVO
 {
-    public class OctreeData
+    public class OctreeData: MonoBehaviour
     {
-        public static OctreeData Load(string filePath)
-        {
-            var fstream = File.OpenRead(filePath);
-            
-            var structureData = new List<int>();
-            var shadingData = new List<int>();
-            var freeStructureMemory = new Queue<int>();
-            var freeShadingMemory = new List<int>();
-            
-            var buffer = new byte[4];
-            fstream.Read(buffer, 0, 4);
-            var s = BitConverter.ToInt32(buffer, 0);
-            structureData.Capacity = Mathf.NextPowerOfTwo(s);
-            for (var j = 0; j < s; j++)
-            {
-                fstream.Read(buffer, 0, 4);
-                var n = BitConverter.ToInt32(buffer, 0);
-                structureData.Add(n);
-            }
-            
-            fstream.Read(buffer, 0, 4);
-            s = BitConverter.ToInt32(buffer, 0);
-            shadingData.Capacity = Mathf.NextPowerOfTwo(s);
-            for (var j = 0; j < s; j++)
-            {
-                fstream.Read(buffer, 0, 4);
-                var n = BitConverter.ToInt32(buffer, 0);
-                shadingData.Add(n);
-            }
-            
-            fstream.Read(buffer, 0, 4);
-            s = BitConverter.ToInt32(buffer, 0);
-            for (var j = 0; j < s; j++)
-            {
-                fstream.Read(buffer, 0, 4);
-                var n = BitConverter.ToInt32(buffer, 0);
-                freeStructureMemory.Enqueue(n);
-            }
-            
-            fstream.Read(buffer, 0, 4);
-            s = BitConverter.ToInt32(buffer, 0);
-            freeShadingMemory.Capacity = Mathf.NextPowerOfTwo(s);
-            for (var j = 0; j < s; j++)
-            {
-                fstream.Read(buffer, 0, 4);
-                var n = BitConverter.ToInt32(buffer, 0);
-                freeShadingMemory.Add(n);
-            }
-            
-            fstream.Dispose();
-            
-            return new OctreeData(structureData, shadingData, freeStructureMemory, freeShadingMemory);
-        }
-        
-        private static readonly byte[] ShadingDataSizeTable = new byte[256];
-
-        static OctreeData()
-        {
-            for (var i = 0; i < 256; i++)
-            {
-                // Count number of set bits. Naive algorithm.
-                byte c = 0;
-                for (var mask = 1; mask < 256; mask <<= 1)
-                {
-                    c += Convert.ToByte((i & mask) > 0);
-                }
-
-                ShadingDataSizeTable[i] = c;
-            }
-        }
-
-        public static OctreeData FromMesh(Mesh mesh, int depth, bool autoTransform, Func<Bounds, Color> color, int submesh=0)
-        {
-            var data = new OctreeData();
-
-            void Fill(int fillDepth, Bounds bounds, Vector3[] triangleVerts, Vector3 normal)
-            {
-                if (TriBoxOverlap.IsIntersecting(bounds, triangleVerts))
-                {
-                    if (depth == fillDepth)
-                    {
-                        data.SetSolidVoxel(bounds.min, depth, VoxelAttribute.Encode(color(bounds), normal));
-                    }
-                    else
-                    {
-                        for (var i = 0; i < 8; i++)
-                        {
-                            var nextCenter = 0.5f * bounds.extents + bounds.min;
-                            if ((i & 4) > 0) nextCenter.x += bounds.extents.x;
-                            if ((i & 2) > 0) nextCenter.y += bounds.extents.y;
-                            if ((i & 1) > 0) nextCenter.z += bounds.extents.z;
-                            Fill(fillDepth + 1, new Bounds(nextCenter, bounds.extents), triangleVerts, normal);
-                        }
-                    }
-                }
-            }
-            
-            var scaleVec = new Vector3(.5f, .5f, .5f);
-            scaleVec.Scale(new Vector3(1/mesh.bounds.extents.x, 1/mesh.bounds.extents.y, 1/mesh.bounds.extents.z));
-            var scale = Mathf.Min(Mathf.Min(scaleVec.x, scaleVec.y), scaleVec.z);
-            
-            var vertices = mesh.vertices;
-            var indices = mesh.GetIndices(submesh);
-            var normals = mesh.normals;
-
-            for (var i = 0; i < indices.Length; i += 3)
-            {
-                var normal = normals[indices[i]];
-                Vector3[] triVerts;
-                if (autoTransform)
-                    triVerts = new[]
-                    {
-                        vertices[indices[i]] - mesh.bounds.center,
-                        vertices[indices[i + 1]] - mesh.bounds.center,
-                        vertices[indices[i + 2]] - mesh.bounds.center
-                    };
-                else
-                    triVerts = new[]
-                    {
-                        vertices[indices[i]],
-                        vertices[indices[i + 1]],
-                        vertices[indices[i + 2]]
-                    };
-                for (var j = 0; j < 3; j++)
-                {
-                    if(autoTransform) triVerts[j] *= scale;
-                    triVerts[j] += new Vector3(1.5f, 1.5f, 1.5f);
-                }
-                
-                Fill(0, new Bounds(new Vector3(1.5f, 1.5f, 1.5f), Vector3.one), triVerts, normal);
-            }
-
-            return data;
-        }
-
         // These lists are effectively unmanaged memory blocks. This allows for a simple transition from CPU to GPU memory,
         // and is much faster for the C# gc to deal with.
-        internal List<int> StructureData = new List<int>(new[] { 1 << 31 });
-        internal List<int> ShadingData = new List<int>(new[] { 0 });
+        [SerializeField][HideInInspector]
+        internal List<int> structureData = new List<int>(new[] { 1 << 31 });
+        [SerializeField][HideInInspector]
+        internal List<int> attributeData = new List<int>(new[] { 0 });
 
-        internal Queue<int> FreeStructureMemory = new Queue<int>();
-        internal List<int> FreeShadingMemory = new List<int>();
-        
-        private readonly int[] _ptrStack = new int[24];
+        [SerializeField][HideInInspector]
+        internal Queue<int> freeStructureMemory = new Queue<int>();
+        [SerializeField][HideInInspector]
+        internal List<int> freeShadingMemory = new List<int>();
+
+        public ulong UpdateIndex { get; private set; }
+
+        private int[] _ptrStack = new int[24];
         private Vector3 _ptrStackPos = Vector3.one;
         private int _ptrStackDepth;
 
@@ -159,24 +32,31 @@ namespace SVO
             _ptrStack[0] = 0;
         }
 
-        internal OctreeData(List<int> structureData, List<int> shadingData, 
-            Queue<int> freeStructureMemory, List<int> freeShadingMemory)
+        private void Awake()
         {
-            StructureData = structureData;
-            ShadingData = shadingData;
-            FreeStructureMemory = freeStructureMemory;
-            FreeShadingMemory = freeShadingMemory;
+            UpdateIndex = (ulong) Random.Range(int.MinValue, int.MaxValue) << 32 | (ulong) Random.Range(int.MinValue, int.MaxValue);
         }
 
-        /**
-         * position: Position of the voxel, with each component in the range [1, 2).
-         * depth: Depth of the voxel. A depth of n means a voxel of editDepth pow(2f, -n)
-         * shadingData: The shading data for the voxel. From VoxelAttributes.Encode().
-         */
-        public void SetSolidVoxel(Vector3 position, int depth, int[] shadingData)
+        /// <summary>
+        /// Edits the voxel at some position with depth and attributes data.
+        /// </summary>
+        /// <param name="position">Position of the voxel, with each component in the range [1, 2).</param>
+        /// <param name="depth">Depth of the voxel. A depth of n means a voxel of editDepth pow(2f, -n)</param>
+        /// <param name="color">Color of the voxel</param>
+        /// <param name="attributes">Shading data for the voxel. Best for properties like normals.</param>
+        public void SetSolidVoxel12(Vector3 position, int depth, Color color, int[] attributes)
         {
             static unsafe int AsInt(float f) => *(int*)&f;
             static int FirstSetHigh(int i) => (AsInt(i) >> 23) - 127;
+            
+            var internalAttributes = new int[attributes.Length + 1];
+            internalAttributes[0] |= (attributes.Length + 1) << 24;
+            internalAttributes[0] |= (int)(color.r * 255) << 16;
+            internalAttributes[0] |= (int)(color.g * 255) << 8;
+            internalAttributes[0] |= (int)(color.b * 255) << 0;
+            for (var i = 0; i < attributes.Length; i++) internalAttributes[i + 1] = attributes[i];
+
+            UpdateIndex = (ulong)Random.Range(int.MinValue, int.MaxValue) << 32 | (ulong)Random.Range(int.MinValue, int.MaxValue);
             
             Debug.Assert(position.x < 2 && position.x >= 1);
             Debug.Assert(position.y < 2 && position.y >= 1);
@@ -190,12 +70,12 @@ namespace SVO
             var stepDepth = Math.Min(Math.Min(firstSet - 1, _ptrStackDepth), depth);
             
             var ptr = _ptrStack[stepDepth];
-            var type = (StructureData[ptr] >> 31) & 1; // Type of root node
+            var type = (structureData[ptr] >> 31) & 1; // Type of root node
             // Step down one depth until a non-ptr node is hit or the max depth is reached.
             while(type == 0 && stepDepth < depth)
             {
                 // Descend to the next branch
-                ptr = StructureData[ptr]; 
+                ptr = structureData[ptr]; 
                 
                 // Step to next node
                 stepDepth++;
@@ -207,26 +87,26 @@ namespace SVO
                 _ptrStack[stepDepth] = ptr;
                 
                 // Get type of the node
-                type = (StructureData[ptr] >> 31) & 1;
+                type = (structureData[ptr] >> 31) & 1;
             }
             _ptrStackDepth = stepDepth;
             _ptrStackPos = position;
 
             // Pointer will be deleted, so all children must be as well.
             if (type == 0)
-                FreeStructureMemory.Enqueue(StructureData[ptr]);
+                freeStructureMemory.Enqueue(structureData[ptr]);
 
-            var original = StructureData[ptr];
+            var original = structureData[ptr];
             int[] originalShadingData;
             if (type == 1 && original != 1 << 31)
             {
-                // Get the shading data
+                // Get the attributes data
                 var shadingPtr = original & 0x7FFFFFFF;
-                var size = ShadingDataSizeTable[Math.Abs(ShadingData[shadingPtr] >> 24)];
+                var size = internalAttributes.Length;
                 originalShadingData = new int[size];
                 for (var i = 0; i < size; i++)
-                    originalShadingData[i] = ShadingData[shadingPtr + i];
-                FreeShadingMemory.Add(shadingPtr);
+                    originalShadingData[i] = this.attributeData[shadingPtr + i];
+                freeShadingMemory.Add(shadingPtr);
             }
             else originalShadingData = new int[0];
             while (stepDepth < depth)
@@ -234,18 +114,18 @@ namespace SVO
                 stepDepth++;
                 // Create another branch to go down another depth
                 // The last hit voxel MUST be type 1. Otherwise stepDepth == depth.
-                var branchPtr = FreeStructureMemory.Count > 0 ? FreeStructureMemory.Dequeue() : StructureData.Count;
-                if (branchPtr == StructureData.Count)
+                var branchPtr = freeStructureMemory.Count > 0 ? freeStructureMemory.Dequeue() : structureData.Count;
+                if (branchPtr == structureData.Count)
                 {
                     for (var i = 0; i < 8; i++)
-                        StructureData.Add((1 << 31) | AllocateShadingData(originalShadingData));
+                        structureData.Add((1 << 31) | AllocateAttributeData(originalShadingData));
                 }
                 else {
                     for (var i = 0; i < 8; i++)
-                        StructureData[branchPtr + i] = (1 << 31) | AllocateShadingData(originalShadingData);
+                        structureData[branchPtr + i] = (1 << 31) | AllocateAttributeData(originalShadingData);
                 }
                 _ptrStack[stepDepth] = branchPtr;
-                StructureData[ptr] = branchPtr;
+                structureData[ptr] = branchPtr;
                 ptr = branchPtr;
                 
                 // Move to the position of the right child node.
@@ -255,7 +135,44 @@ namespace SVO
                 var childIndex = (xm << 2) + (ym << 1) + zm;
                 ptr += childIndex;
             }
-            StructureData[ptr] = (1 << 31) | AllocateShadingData(shadingData);
+            structureData[ptr] = (1 << 31) | AllocateAttributeData(internalAttributes);
+        }
+
+        /// <summary>
+        /// Edits the voxel at some position with depth and attributes data.
+        /// </summary>
+        /// <param name="position">Position of the voxel, with each component in the range [-.5, .5).</param>
+        /// <param name="depth">Depth of the voxel. A depth of n means a voxel of editDepth pow(2f, -n)</param>
+        /// <param name="color">Color of the voxel</param>
+        /// <param name="attributes">Shading data for the voxel. Best for properties like normals.</param>
+        public void SetSolidVoxel(Vector3 position, int depth, Color color, int[] attributes)
+        {
+            SetSolidVoxel12(position + new Vector3(1.5f, 1.5f, 1.5f), depth, color, attributes);
+        }
+
+        public void FillTriangle(Vector3[] vertices, int depth, Func<Bounds, Tuple<Color, int[]>> attributeGenerator)
+        {
+            void FillRecursively(int currentDepth, Bounds bounds)
+            {
+                if (TriBoxOverlap.IsIntersecting(bounds, vertices))
+                {
+                    if (depth == currentDepth)
+                    {
+                        var (color, attributes) = attributeGenerator(bounds);
+                        SetSolidVoxel(bounds.min, depth, color, attributes);
+                    }
+                    else for (var i = 0; i < 8; i++) // Call recursively for children.
+                    {
+                        var nextCenter = 0.5f * bounds.extents + bounds.min;
+                        if ((i & 4) > 0) nextCenter.x += bounds.extents.x;
+                        if ((i & 2) > 0) nextCenter.y += bounds.extents.y;
+                        if ((i & 1) > 0) nextCenter.z += bounds.extents.z;
+                        FillRecursively(currentDepth + 1, new Bounds(nextCenter, bounds.extents));
+                    }
+                }
+            }
+            
+            FillRecursively(0, new Bounds(Vector3.zero, Vector3.one));
         }
 
         public RayHit? CastRay(Ray ray, Vector3 octreeScale, Vector3 octreePos)
@@ -325,10 +242,10 @@ namespace SVO
                 int firstSet = 23 - FirstSetHigh(differingBits);
                 int depth = Mathf.Min(firstSet - 1, stackDepth);
                 int ptr = stack[depth];
-                int type = StructureData[ptr] >> 31 & 1;
+                int type = structureData[ptr] >> 31 & 1;
                 while(type == 0)
                 {
-                    ptr = StructureData[ptr];
+                    ptr = structureData[ptr];
                     depth++;
                     int xm = AsInt(nextPath.x) >> 23 - depth & 1;
                     int ym = AsInt(nextPath.y) >> 23 - depth & 1;
@@ -337,7 +254,7 @@ namespace SVO
                     childIndex ^= signMask;
                     ptr += childIndex;
                     stack[depth] = ptr;
-                    type = StructureData[ptr] >> 31 & 1;
+                    type = structureData[ptr] >> 31 & 1;
                 }
                 stackDepth = depth;
                 // Remove unused bits
@@ -346,17 +263,17 @@ namespace SVO
                 stackPath.z = AsFloat(AsInt(nextPath.z) & ~((1 << 23 - depth) - 1));
                 
                 // Return hit if voxel is solid
-                if(type == 1 && StructureData[ptr] != 1 << 31)
+                if(type == 1 && structureData[ptr] != 1 << 31)
                 {
                     RayHit hit = new RayHit();
 
-                    int shadingPtr = StructureData[ptr] & 0x7FFFFFFF;
+                    int shadingPtr = structureData[ptr] & 0x7FFFFFFF;
                     
-                    int colorData = ShadingData[shadingPtr];
+                    int colorData = attributeData[shadingPtr];
                     hit.Color = new Color((colorData >> 16 & 0xFF) / 255f, (colorData >> 8 & 0xFF) / 255f, (colorData & 0xFF) / 255f);
                     
                     // Normals transformed to [0, 1] range
-                    int normalData = ShadingData[shadingPtr + 1];
+                    int normalData = attributeData[shadingPtr + 1];
                     int normalSignBit = normalData >> 22 & 1;
                     int axis = normalData >> 20 & 3;
                     int comp2 = normalData >> 10 & 0x3FF;
@@ -461,54 +378,44 @@ namespace SVO
             return null;
         }
 
-        private int AllocateShadingData(int[] shadingData)
+        private int AllocateAttributeData(IReadOnlyList<int> attributes)
         {
-            if (shadingData.Length == 0) return 0;
+            if (attributes.Count == 0) return 0;
             var index = 0;
-            foreach (var ptr in FreeShadingMemory)
+            foreach (var ptr in freeShadingMemory)
             {
-                var size = ShadingDataSizeTable[(uint)ShadingData[ptr] >> 24];
-                if (size < shadingData.Length)
+                var size = (uint)this.attributeData[ptr] >> 24;
+                if (size < attributes.Count)
                 {
                     index++;
                     continue;
                 }
                 
-                for (var i = 0; i < shadingData.Length; i++)
+                for (var i = 0; i < attributes.Count; i++)
                 {
-                    ShadingData[ptr + i] = shadingData[i];
+                    this.attributeData[ptr + i] = attributes[i];
                 }
-                FreeShadingMemory.RemoveAt(index);
+                freeShadingMemory.RemoveAt(index);
                 return ptr;
             }
 
-            var endPtr = ShadingData.Count;
-            ShadingData.AddRange(shadingData);
+            var endPtr = this.attributeData.Count;
+            this.attributeData.AddRange(attributes);
             return endPtr;
         }
-        
-        public void Save(string filePath)
+
+        /// <summary>
+        /// Sets the octree data to be a singular clear voxel.
+        /// </summary>
+        public void Clear()
         {
-            var fstream = File.OpenWrite(filePath);
-            
-            fstream.Write(BitConverter.GetBytes(StructureData.Count), 0, 4);
-            foreach (var n in StructureData)
-                fstream.Write(BitConverter.GetBytes(n), 0, 4);
-
-            fstream.Write(BitConverter.GetBytes(ShadingData.Count), 0, 4);
-            foreach (var n in ShadingData)
-                fstream.Write(BitConverter.GetBytes(n), 0, 4);
-
-            fstream.Write(BitConverter.GetBytes(FreeStructureMemory.Count), 0, 4);
-            foreach (var n in FreeStructureMemory)
-                fstream.Write(BitConverter.GetBytes(n), 0, 4);
-
-            fstream.Write(BitConverter.GetBytes(FreeShadingMemory.Count), 0, 4);
-            foreach (var n in FreeShadingMemory)
-                fstream.Write(BitConverter.GetBytes(n), 0, 4);
-            
-            fstream.Flush();
-            fstream.Dispose();
+            structureData = new List<int>(new[] { 1 << 31 });
+            attributeData = new List<int>(new[] { 0 });
+            freeStructureMemory = new Queue<int>();
+            freeShadingMemory = new List<int>();
+            _ptrStack = new int[24];
+            _ptrStackPos = Vector3.one;
+            _ptrStackDepth = 0;
         }
     }
 }

@@ -11,7 +11,8 @@ struct ray_hit
 {
     float4 color;
     float3 world_position;
-    float3 normal;
+    int shading_data_size;
+    int shading_data_ptr;
 };
 
 /* Casts a ray into an octree.
@@ -97,36 +98,10 @@ ray_hit cast_ray(ray world_ray,
             int shading_ptr = octree_primary_data[ptr] & 0x7FFFFFFF;
             
             int color_data = octree_attrib_data[shading_ptr];
+            int shading_data_size = (int)((uint)color_data >> 24);
+            hit.shading_data_size = shading_data_size;
+            hit.shading_data_ptr = shading_ptr + 1;
             hit.color = float4((color_data >> 16 & 0xFF) / 255.f, (color_data >> 8 & 0xFF) / 255.f, (color_data & 0xFF) / 255.f, 1.f);
-            
-            // Normals transformed to [0, 1] range
-            int normal_data = octree_attrib_data[shading_ptr + 1];
-            int sign_bit = normal_data >> 22 & 1;
-            int axis = normal_data >> 20 & 3;
-            int comp2 = normal_data >> 10 & 0x3FF;
-            int comp1 = normal_data & 0x3FF;
-
-            float3 normal = float3(0, 0, 0);
-            switch(axis)
-            {
-                case 0:
-                    normal.x = sign_bit * 2.f - 1;
-                    normal.y = comp2 / 1023.f * 2.f - 1;
-                    normal.z = comp1 / 1023.f * 2.f - 1;
-                    break;
-                case 1:
-                    normal.x = comp2 / 1023.f * 2.f - 1;
-                    normal.y = sign_bit * 2.f - 1;
-                    normal.z = comp1 / 1023.f * 2.f - 1;
-                    break;
-                case 2:
-                    normal.x = comp2 / 1023.f * 2.f - 1;
-                    normal.y = comp1 / 1023.f * 2.f - 1;
-                    normal.z = sign_bit * 2.f - 1;
-                    break;
-            }
-            normal = normalize(normal);
-            hit.normal = normal;
 
             // Undo coordinate mirroring in next_path
             float3 mirrored_path = next_path;
@@ -152,7 +127,38 @@ ray_hit cast_ray(ray world_ray,
         if(ty_max <= t_max) next_path.y = y_far - epsilon;
         if(tz_max <= t_max) next_path.z = z_far - epsilon;
     }
-    while(all((asint(next_path) & 0xFF800000) == 0x3f800000));
+    while(all((asint(next_path) & 0xFF800000) == 0x3f800000)); // Same as 1 <= next_path < 2 
 
     return failed_ray_hit;
+}
+
+float3 decode_normal(int encoded_normal)
+{
+    int sign_bit = encoded_normal >> 22 & 1;
+    int axis = encoded_normal >> 20 & 3;
+    int comp2 = encoded_normal >> 10 & 0x3FF;
+    int comp1 = encoded_normal & 0x3FF;
+
+    float3 normal = float3(0, 0, 0);
+    switch(axis)
+    {
+    case 0:
+        normal.x = sign_bit * 2.f - 1;
+        normal.y = comp2 / 1023.f * 2.f - 1;
+        normal.z = comp1 / 1023.f * 2.f - 1;
+        break;
+    case 1:
+        normal.x = comp2 / 1023.f * 2.f - 1;
+        normal.y = sign_bit * 2.f - 1;
+        normal.z = comp1 / 1023.f * 2.f - 1;
+        break;
+    case 2:
+        normal.x = comp2 / 1023.f * 2.f - 1;
+        normal.y = comp1 / 1023.f * 2.f - 1;
+        normal.z = sign_bit * 2.f - 1;
+        break;
+    default: break; // Uh oh, normal has invalid axis
+    }
+    normal = normalize(normal);
+    return normal;
 }

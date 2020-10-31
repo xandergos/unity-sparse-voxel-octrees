@@ -1,76 +1,54 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace SVO
 {
+    [ExecuteAlways]
     public class OctreeModel: MonoBehaviour
     {
+        public OctreeData data;
         private ComputeBuffer _structureBuffer;
         private ComputeBuffer _shadingBuffer;
+
+        private ulong _lastUpdateIndex = ulong.MaxValue;
         
         private static readonly int OctreePrimaryData = Shader.PropertyToID("octree_primary_data");
         private static readonly int OctreeAttribData = Shader.PropertyToID("octree_attrib_data");
         private static readonly int Initialized = Shader.PropertyToID("initialized");
-        
-        internal Queue<int> FreeStructureMemoryCache = new Queue<int>();
-        internal List<int> FreeShadingMemoryCached = new List<int>();
 
-        private OctreeData _initialData;
-        private bool _ready;
-        
-        public void Awake()
+        private void Update()
         {
-            _structureBuffer = new ComputeBuffer(1, 4);
-            _shadingBuffer = new ComputeBuffer(1, 4);
-            if(_initialData != null) SetData(_initialData);
-            _initialData = null;
+            if (data is null) return;
+            if (_lastUpdateIndex != data.UpdateIndex)
+            {
+                _lastUpdateIndex = data.UpdateIndex;
+                ReloadBuffers();
+            }
         }
 
-        public void SetData(OctreeData data)
+        private void ReloadBuffers()
         {
-            _ready = true;
-            FreeShadingMemoryCached = data.FreeShadingMemory;
-            FreeStructureMemoryCache = data.FreeStructureMemory;
-            
-            if (_structureBuffer == null)
+            if (data is null) return;
+            if (_structureBuffer?.count != data.structureData.Count)
             {
-                _initialData = data;
-                return;
+                _structureBuffer?.Release();
+                _structureBuffer = new ComputeBuffer(data.structureData.Count, 4);
             }
-            
-            if (_structureBuffer.count != data.StructureData.Count)
-            {
-                _structureBuffer.Release();
-                _structureBuffer = new ComputeBuffer(data.StructureData.Count, 4);
-            }
-            _structureBuffer.SetData(data.StructureData);
+            _structureBuffer.SetData(data.structureData);
 
-            if (_shadingBuffer.count != data.ShadingData.Count)
+            if (_shadingBuffer?.count != data.attributeData.Count)
             {
-                _shadingBuffer.Release();
-                _shadingBuffer = new ComputeBuffer(data.ShadingData.Count, 4);
+                _shadingBuffer?.Release();
+                _shadingBuffer = new ComputeBuffer(data.attributeData.Count, 4);
             }
-            _shadingBuffer.SetData(data.ShadingData);
-        }
-
-        public OctreeData GetData()
-        {
-            var structureData = new int[0];
-            _structureBuffer.GetData(structureData);
-            var structureDataList = new List<int>(structureData);
-            
-            var shadingData = new int[0];
-            _structureBuffer.GetData(shadingData);
-            var shadingDataList = new List<int>(shadingData);
-            
-            return new OctreeData(structureDataList, shadingDataList, 
-                FreeStructureMemoryCache, FreeShadingMemoryCached);
+            _shadingBuffer.SetData(data.attributeData);
         }
 
         private void OnWillRenderObject()
         {
-            if (!_ready) return;
-            var material = GetComponent<Renderer>().material;
+            if (_structureBuffer is null || _shadingBuffer is null) return;
+            var material = GetComponent<Renderer>().sharedMaterial;
             
             // Update Parameters
             material.SetBuffer(OctreePrimaryData, _structureBuffer);
@@ -80,8 +58,8 @@ namespace SVO
 
         private void OnDestroy()
         {
-            _structureBuffer.Release();
-            _shadingBuffer.Release();
+            _structureBuffer?.Release();
+            _shadingBuffer?.Release();
         }
     }
 }

@@ -1,4 +1,4 @@
-﻿Shader "Custom/Octree"
+﻿Shader "Octree/OctreeStandardLit"
 {
     Properties
     {
@@ -73,14 +73,15 @@
                 ray_hit ray_hit = cast_ray(ray, i.worldScale, objectWorldPos, octree_primary_data, octree_attrib_data);
                 if(ray_hit.world_position.x != -1.f)
                 {
-                    half light0Strength = max(0, dot(ray_hit.normal, _WorldSpaceLightPos0.xyz));
+                    float3 normal = decode_normal(octree_attrib_data[ray_hit.shading_data_ptr]);
+                    half light0Strength = max(0, dot(normal, _WorldSpaceLightPos0.xyz));
 
                     float3 world_view_dir = normalize(UnityWorldSpaceViewDir(ray_hit.world_position));
-                    float3 world_refl = reflect(-world_view_dir, ray_hit.normal);
+                    float3 world_refl = reflect(-world_view_dir, normal);
                     half3 spec = float3(1.f, 1.f, 1.f) * _Shininess * pow(max(0, dot(world_refl, _WorldSpaceLightPos0.xyz)), 32);
                     
                     o.color = ray_hit.color * light0Strength;
-                    o.color.rgb += ShadeSH3Order(half4(ray_hit.normal, 1));
+                    o.color.rgb += ShadeSH3Order(half4(normal, 1));
                     o.color.rgb += spec;
                     float4 clip_pos = mul(UNITY_MATRIX_VP, float4(ray_hit.world_position, 1.0));
 
