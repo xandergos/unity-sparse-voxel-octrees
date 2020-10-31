@@ -8,7 +8,12 @@ Currently the only way to use the library is to download the files and compile t
 
 ## QuickStart
 
-Attach OctreeModel to a GameObject. The model can be edited from a script by using the SetData() method along with the OctreeData class. The OctreeModel can be rendered by creating a material which uses the Custom/Octree shader.
+Place the SVO folder in your Unity Project. You must enable unsafe code: Project Settings > Player > Other Settings > Allow 'unsafe' Code.
+To get a simple octree working:
+- Attach an OctreeModel to a cube object.
+- Attach an OctreeData component to any object.
+- Attach the OctreeData component to the OctreeModel.
+- Edit OctreeData and changes will immediately appear in OctreeModel. This can be done using the MeshToOctreeStandard component or by editing it programatically. Note that MeshToOctreeStandard will ignore triangles that dont intersect the cube object.
 
 ## Limitations
 
