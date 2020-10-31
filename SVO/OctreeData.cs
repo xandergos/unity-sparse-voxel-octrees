@@ -7,7 +7,7 @@ namespace SVO
 {
     public class OctreeData
     {
-        public static OctreeData Load(String filePath)
+        public static OctreeData Load(string filePath)
         {
             var fstream = File.OpenRead(filePath);
             
@@ -65,11 +65,11 @@ namespace SVO
 
         static OctreeData()
         {
-            for (int i = 0; i < 256; i++)
+            for (var i = 0; i < 256; i++)
             {
                 // Count number of set bits. Naive algorithm.
                 byte c = 0;
-                for (int mask = 1; mask < 256; mask <<= 1)
+                for (var mask = 1; mask < 256; mask <<= 1)
                 {
                     c += Convert.ToByte((i & mask) > 0);
                 }
@@ -222,7 +222,7 @@ namespace SVO
             {
                 // Get the shading data
                 var shadingPtr = original & 0x7FFFFFFF;
-                var size = ShadingDataSizeTable[ShadingData[shadingPtr] >> 24];
+                var size = ShadingDataSizeTable[Math.Abs(ShadingData[shadingPtr] >> 24)];
                 originalShadingData = new int[size];
                 for (var i = 0; i < size; i++)
                     originalShadingData[i] = ShadingData[shadingPtr + i];
@@ -464,15 +464,21 @@ namespace SVO
         private int AllocateShadingData(int[] shadingData)
         {
             if (shadingData.Length == 0) return 0;
+            var index = 0;
             foreach (var ptr in FreeShadingMemory)
             {
-                var size = ShadingDataSizeTable[ShadingData[ptr] >> 24];
-                if (size < shadingData.Length) continue;
+                var size = ShadingDataSizeTable[(uint)ShadingData[ptr] >> 24];
+                if (size < shadingData.Length)
+                {
+                    index++;
+                    continue;
+                }
                 
                 for (var i = 0; i < shadingData.Length; i++)
                 {
                     ShadingData[ptr + i] = shadingData[i];
                 }
+                FreeShadingMemory.RemoveAt(index);
                 return ptr;
             }
 
@@ -481,7 +487,7 @@ namespace SVO
             return endPtr;
         }
         
-        public void Save(String filePath)
+        public void Save(string filePath)
         {
             var fstream = File.OpenWrite(filePath);
             

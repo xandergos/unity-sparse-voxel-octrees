@@ -130,7 +130,6 @@ ray_hit cast_ray(ray world_ray,
 
             // Undo coordinate mirroring in next_path
             float3 mirrored_path = next_path;
-            //float size = exp2(-depth);
             if(sign_mask >> 2 != 0) mirrored_path.x = 3.f - next_path.x;
             if(sign_mask >> 1 & 1 != 0) mirrored_path.y = 3.f - next_path.y;
             if(sign_mask & 1 != 0) mirrored_path.z = 3.f - next_path.z;

@@ -16,6 +16,7 @@ namespace SVO
         internal List<int> FreeShadingMemoryCached = new List<int>();
 
         private OctreeData _initialData;
+        private bool _ready;
         
         public void Awake()
         {
@@ -27,6 +28,7 @@ namespace SVO
 
         public void SetData(OctreeData data)
         {
+            _ready = true;
             FreeShadingMemoryCached = data.FreeShadingMemory;
             FreeStructureMemoryCache = data.FreeStructureMemory;
             
@@ -67,6 +69,7 @@ namespace SVO
 
         private void OnWillRenderObject()
         {
+            if (!_ready) return;
             var material = GetComponent<Renderer>().material;
             
             // Update Parameters
