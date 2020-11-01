@@ -63,7 +63,7 @@ ray_hit cast_ray(ray world_ray,
     stack[0] = 0;
     int stack_depth = 0;
     float3 stack_path = float3(1, 1, 1);
-
+    
     do
     {
         // GET voxel at targetPos

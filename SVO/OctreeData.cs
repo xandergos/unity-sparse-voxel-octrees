@@ -21,7 +21,7 @@ namespace SVO
         [SerializeField][HideInInspector]
         internal List<int> freeShadingMemory = new List<int>();
 
-        public ulong UpdateIndex { get; private set; }
+        public float LastUpdate { get; private set; }
 
         private int[] _ptrStack = new int[24];
         private Vector3 _ptrStackPos = Vector3.one;
@@ -29,12 +29,7 @@ namespace SVO
 
         public OctreeData()
         {
-            _ptrStack[0] = 0;
-        }
-
-        private void Awake()
-        {
-            UpdateIndex = (ulong) Random.Range(int.MinValue, int.MaxValue) << 32 | (ulong) Random.Range(int.MinValue, int.MaxValue);
+            _ptrStack[0] = 0; 
         }
 
         /// <summary>
@@ -44,7 +39,7 @@ namespace SVO
         /// <param name="depth">Depth of the voxel. A depth of n means a voxel of editDepth pow(2f, -n)</param>
         /// <param name="color">Color of the voxel</param>
         /// <param name="attributes">Shading data for the voxel. Best for properties like normals.</param>
-        public void SetSolidVoxel12(Vector3 position, int depth, Color color, int[] attributes)
+        private void SetSolidVoxel12(Vector3 position, int depth, Color color, int[] attributes)
         {
             static unsafe int AsInt(float f) => *(int*)&f;
             static int FirstSetHigh(int i) => (AsInt(i) >> 23) - 127;
@@ -56,7 +51,7 @@ namespace SVO
             internalAttributes[0] |= (int)(color.b * 255) << 0;
             for (var i = 0; i < attributes.Length; i++) internalAttributes[i + 1] = attributes[i];
 
-            UpdateIndex = ((ulong)Random.Range(int.MinValue, int.MaxValue) << 32) | (ulong)Random.Range(int.MinValue, int.MaxValue);
+            LastUpdate = Time.time;
             
             Debug.Assert(position.x < 2 && position.x >= 1);
             Debug.Assert(position.y < 2 && position.y >= 1);
