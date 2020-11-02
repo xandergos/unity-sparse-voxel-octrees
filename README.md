@@ -13,7 +13,7 @@ To get a simple octree working:
 - Attach an OctreeModel to a cube object.
 - Attach an OctreeData component to any object.
 - Attach the OctreeData component to the OctreeModel.
-- Edit OctreeData and changes will immediately appear in OctreeModel. This can be done using the MeshToOctreeStandard component or by editing it programatically. Note that MeshToOctreeStandard will ignore triangles that dont intersect the cube object.
+- Edit OctreeData and changes will immediately appear in OctreeModel. This can be done using the MeshToOctreeStandard component or by editing it programatically.
 
 ## Limitations
 
