@@ -1,14 +1,34 @@
-﻿using System;
+﻿﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using JetBrains.Annotations;
 using UnityEngine;
-using Random = UnityEngine.Random;
+ using UnityEngine.Serialization;
+ using Random = UnityEngine.Random;
 
 namespace SVO
 {
     public class OctreeData: MonoBehaviour
     {
+        private ComputeBuffer _structureBuffer;
+        private ComputeBuffer _attributeBuffer;
+        public ComputeBuffer StructureBuffer
+        {
+            get
+            {
+                if (_dirty) ReloadBuffers();
+                return _structureBuffer;
+            }
+        }
+        public ComputeBuffer AttributeBuffer
+        {
+            get
+            {
+                if (_dirty) ReloadBuffers();
+                return _attributeBuffer;
+            }
+        }
+        
         // These lists are effectively unmanaged memory blocks. This allows for a simple transition from CPU to GPU memory,
         // and is much faster for the C# gc to deal with.
         [SerializeField][HideInInspector]
@@ -17,11 +37,11 @@ namespace SVO
         internal List<int> attributeData = new List<int>(new[] { 0 });
 
         [SerializeField][HideInInspector]
-        internal Queue<int> freeStructureMemory = new Queue<int>();
+        internal List<int> freeStructureMemory = new List<int>();
         [SerializeField][HideInInspector]
-        internal List<int> freeShadingMemory = new List<int>();
+        internal List<int> freeAttributeMemory = new List<int>();
 
-        public float LastUpdate { get; private set; }
+        private bool _dirty = true;
 
         private int[] _ptrStack = new int[24];
         private Vector3 _ptrStackPos = Vector3.one;
@@ -30,6 +50,29 @@ namespace SVO
         public OctreeData()
         {
             _ptrStack[0] = 0; 
+        }
+
+        /// <summary>
+        /// Removes all octree data from memory. It must be retrieved again anytime its needed, such as for
+        /// ray-casting or setting voxels.
+        /// </summary>
+        public void ClearCpuMemory()
+        {
+            if(_dirty) ReloadBuffers();
+            structureData = null;
+            attributeData = null;
+        }
+        
+        /// <summary>
+        /// Edits the voxel at some position with depth and attributes data.
+        /// </summary>
+        /// <param name="position">Position of the voxel, with each component in the range [-.5, .5).</param>
+        /// <param name="depth">Depth of the voxel. A depth of n means a voxel of editDepth pow(2f, -n)</param>
+        /// <param name="color">Color of the voxel</param>
+        /// <param name="attributes">Shading data for the voxel. Best for properties like normals.</param>
+        public void SetSolidVoxel(Vector3 position, int depth, Color color, int[] attributes)
+        {
+            SetSolidVoxel12(position + new Vector3(1.5f, 1.5f, 1.5f), depth, color, attributes);
         }
 
         /// <summary>
@@ -43,6 +86,8 @@ namespace SVO
         {
             unsafe int AsInt(float f) => *(int*)&f;
             int FirstSetHigh(int i) => (AsInt(i) >> 23) - 127;
+
+            if (structureData is null || attributeData is null) RetrieveBuffers();
             
             var internalAttributes = new int[attributes.Length + 1];
             internalAttributes[0] |= (attributes.Length + 1) << 24;
@@ -51,7 +96,7 @@ namespace SVO
             internalAttributes[0] |= (int)(color.b * 255) << 0;
             for (var i = 0; i < attributes.Length; i++) internalAttributes[i + 1] = attributes[i];
 
-            LastUpdate = Time.time;
+            _dirty = true;
             
             Debug.Assert(position.x < 2 && position.x >= 1);
             Debug.Assert(position.y < 2 && position.y >= 1);
@@ -88,8 +133,7 @@ namespace SVO
             _ptrStackPos = position;
 
             // Pointer will be deleted, so all children must be as well.
-            if (type == 0)
-                freeStructureMemory.Enqueue(structureData[ptr]);
+            if (type == 0) freeStructureMemory.Add(structureData[ptr]);
 
             var original = structureData[ptr];
             int[] originalShadingData;
@@ -100,8 +144,8 @@ namespace SVO
                 var size = internalAttributes.Length;
                 originalShadingData = new int[size];
                 for (var i = 0; i < size; i++)
-                    originalShadingData[i] = this.attributeData[shadingPtr + i];
-                freeShadingMemory.Add(shadingPtr);
+                    originalShadingData[i] = attributeData[shadingPtr + i];
+                freeAttributeMemory.Add(shadingPtr);
             }
             else originalShadingData = new int[0];
             while (stepDepth < depth)
@@ -109,7 +153,12 @@ namespace SVO
                 stepDepth++;
                 // Create another branch to go down another depth
                 // The last hit voxel MUST be type 1. Otherwise stepDepth == depth.
-                var branchPtr = freeStructureMemory.Count > 0 ? freeStructureMemory.Dequeue() : structureData.Count;
+                var branchPtr = structureData.Count;
+                if (freeStructureMemory.Count > 0)
+                {
+                    branchPtr = freeStructureMemory[freeStructureMemory.Count - 1];
+                    freeStructureMemory.RemoveAt(freeStructureMemory.Count - 1);
+                }
                 if (branchPtr == structureData.Count)
                 {
                     for (var i = 0; i < 8; i++)
@@ -131,18 +180,6 @@ namespace SVO
                 ptr += childIndex;
             }
             structureData[ptr] = (1 << 31) | AllocateAttributeData(internalAttributes);
-        }
-
-        /// <summary>
-        /// Edits the voxel at some position with depth and attributes data.
-        /// </summary>
-        /// <param name="position">Position of the voxel, with each component in the range [-.5, .5).</param>
-        /// <param name="depth">Depth of the voxel. A depth of n means a voxel of editDepth pow(2f, -n)</param>
-        /// <param name="color">Color of the voxel</param>
-        /// <param name="attributes">Shading data for the voxel. Best for properties like normals.</param>
-        public void SetSolidVoxel(Vector3 position, int depth, Color color, int[] attributes)
-        {
-            SetSolidVoxel12(position + new Vector3(1.5f, 1.5f, 1.5f), depth, color, attributes);
         }
 
         public void FillTriangle(Vector3[] vertices, int depth, Func<Bounds, Tuple<Color, int[]>> attributeGenerator)
@@ -176,6 +213,8 @@ namespace SVO
             unsafe float AsFloat(int i) => *(float*)&i;
             int FirstSetHigh(int i) => (AsInt(i) >> 23) - 127;
 
+            if (structureData is null || attributeData is null) RetrieveBuffers();
+            
             ray.direction.Scale(new Vector3(1 / octreeScale.x, 1 / octreeScale.y, 1 / octreeScale.z));
             ray.direction.Normalize();
             var rayOrigin = ray.origin;
@@ -377,7 +416,7 @@ namespace SVO
         {
             if (attributes.Count == 0) return 0;
             var index = 0;
-            foreach (var ptr in freeShadingMemory)
+            foreach (var ptr in freeAttributeMemory)
             {
                 var size = (uint)this.attributeData[ptr] >> 24;
                 if (size < attributes.Count)
@@ -390,13 +429,43 @@ namespace SVO
                 {
                     this.attributeData[ptr + i] = attributes[i];
                 }
-                freeShadingMemory.RemoveAt(index);
+                freeAttributeMemory.RemoveAt(index);
                 return ptr;
             }
 
             var endPtr = this.attributeData.Count;
             this.attributeData.AddRange(attributes);
             return endPtr;
+        }
+
+        private void ReloadBuffers()
+        {
+            Debug.Assert(!(structureData is null) && !(attributeData is null));
+            
+            _dirty = false;
+            if (_structureBuffer?.count != structureData.Count)
+            {
+                _structureBuffer?.Release();
+                _structureBuffer = new ComputeBuffer(structureData.Count, 4);
+            }
+            _structureBuffer.SetData(structureData);
+
+            if (_attributeBuffer?.count != attributeData.Count)
+            {
+                _attributeBuffer?.Release();
+                _attributeBuffer = new ComputeBuffer(attributeData.Count, 4);
+            }
+            _attributeBuffer.SetData(attributeData);
+        }
+
+        private void RetrieveBuffers()
+        {
+            var structureDataArr = new int[_structureBuffer.count];
+            var attributeDataArr = new int[_attributeBuffer.count];
+            _structureBuffer.GetData(structureDataArr);
+            _attributeBuffer.GetData(attributeDataArr);
+            structureData = new List<int>(structureDataArr);
+            attributeData = new List<int>(attributeDataArr);
         }
 
         /// <summary>
@@ -406,11 +475,17 @@ namespace SVO
         {
             structureData = new List<int>(new[] { 1 << 31 });
             attributeData = new List<int>(new[] { 0 });
-            freeStructureMemory = new Queue<int>();
-            freeShadingMemory = new List<int>();
+            freeStructureMemory = new List<int>();
+            freeAttributeMemory = new List<int>();
             _ptrStack = new int[24];
             _ptrStackPos = Vector3.one;
             _ptrStackDepth = 0;
+        }
+
+        private void OnDestroy()
+        {
+            _structureBuffer?.Release();
+            _attributeBuffer?.Release();
         }
     }
 }
