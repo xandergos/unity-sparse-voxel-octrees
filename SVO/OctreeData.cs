@@ -41,8 +41,8 @@ namespace SVO
         /// <param name="attributes">Shading data for the voxel. Best for properties like normals.</param>
         private void SetSolidVoxel12(Vector3 position, int depth, Color color, int[] attributes)
         {
-            static unsafe int AsInt(float f) => *(int*)&f;
-            static int FirstSetHigh(int i) => (AsInt(i) >> 23) - 127;
+            unsafe int AsInt(float f) => *(int*)&f;
+            int FirstSetHigh(int i) => (AsInt(i) >> 23) - 127;
             
             var internalAttributes = new int[attributes.Length + 1];
             internalAttributes[0] |= (attributes.Length + 1) << 24;
@@ -172,9 +172,9 @@ namespace SVO
 
         public RayHit? CastRay(Ray ray, Vector3 octreeScale, Vector3 octreePos)
         {
-            static unsafe int AsInt(float f) => *(int*)&f;
-            static unsafe float AsFloat(int i) => *(float*)&i;
-            static int FirstSetHigh(int i) => (AsInt(i) >> 23) - 127;
+            unsafe int AsInt(float f) => *(int*)&f;
+            unsafe float AsFloat(int i) => *(float*)&i;
+            int FirstSetHigh(int i) => (AsInt(i) >> 23) - 127;
 
             ray.direction.Scale(new Vector3(1 / octreeScale.x, 1 / octreeScale.y, 1 / octreeScale.z));
             ray.direction.Normalize();

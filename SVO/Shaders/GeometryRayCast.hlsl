@@ -20,11 +20,14 @@ struct ray_hit
  * If a voxel is hit, the ray_hit will have data describing the hit,
  * otherwise, ray_hit will have a position of float3(-1, -1, -1).
  * ray_hit normals and position are both in world pos.
+ *
+ * The mesh (in object space) of the octree should always have center (0, 0, 0) and size (1, 1, 1)
+ * 
  * Note: ray.direction does not have to be normalized!
  */
 ray_hit cast_ray(ray world_ray,
-    float3 octree_scale,
-    float3 octree_pos,
+    float4x4 object_to_world,
+    float4x4 world_to_object,
     StructuredBuffer<int> octree_primary_data,
     StructuredBuffer<int> octree_attrib_data)
 {
@@ -32,11 +35,11 @@ ray_hit cast_ray(ray world_ray,
     failed_ray_hit.world_position = float3(-1.f, -1.f, -1.f);
 
     ray ray = world_ray;
-    ray.direction /= octree_scale;
+    ray.direction = mul(world_to_object, float4(ray.direction, 0));
     ray.direction = normalize(ray.direction);
-    ray.origin += octree_scale * 1.5f;
-    ray.origin -= octree_pos;
-    ray.origin /= octree_scale;
+    ray.origin = mul(world_to_object, float4(ray.origin, 1));
+    // Calculations assume octree voxels are in [1, 2) but mesh is in [-.5, .5]. This corrects that.
+    ray.origin += 1.5;
     
     static const int max_depth = 23;
     static const float epsilon = exp2(-max_depth);
@@ -108,7 +111,7 @@ ray_hit cast_ray(ray world_ray,
             if(sign_mask >> 2 != 0) mirrored_path.x = 3.f - next_path.x;
             if(sign_mask >> 1 & 1 != 0) mirrored_path.y = 3.f - next_path.y;
             if(sign_mask & 1 != 0) mirrored_path.z = 3.f - next_path.z;
-            hit.world_position = (mirrored_path - 1.5f) * octree_scale + octree_pos;
+            hit.world_position = mul(object_to_world, mirrored_path - 1.5f);
             
             return hit;
         }

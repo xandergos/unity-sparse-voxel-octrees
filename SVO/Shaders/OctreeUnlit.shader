@@ -66,10 +66,8 @@
                 ray ray;
                 ray.direction = normalize(i.worldPos - camera_pos);
                 ray.origin = camera_pos;
-                
-                float3 objectWorldPos = unity_ObjectToWorld._m03_m13_m23;
 
-                ray_hit ray_hit = cast_ray(ray, i.worldScale, objectWorldPos, octree_primary_data, octree_attrib_data);
+                ray_hit ray_hit = cast_ray(ray, unity_ObjectToWorld, unity_WorldToObject, octree_primary_data, octree_attrib_data);
                 if(ray_hit.world_position.x != -1.f)
                 {
                     o.color = ray_hit.color;
