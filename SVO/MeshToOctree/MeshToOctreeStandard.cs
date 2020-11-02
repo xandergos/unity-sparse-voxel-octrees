@@ -22,16 +22,12 @@ namespace SVO
         }
 
         protected override Tuple<Color, int[]> GenerateAttributes(Vector3[] triangleVertices, int[] indices, 
-            Bounds voxelObjBounds, Bounds voxelWorldBounds, float octreeSize, Vector3 octreeCenter)
+            Bounds voxelLocalBounds, Bounds voxelMeshBounds, float octreeSize, Vector3 octreeCenter)
         {
-            var barycentric = MathO.ToBarycentricCoordinates(voxelWorldBounds.center, triangleVertices[0], 
+            var barycentric = MathO.ToBarycentricCoordinates(voxelMeshBounds.center, triangleVertices[0],
                 triangleVertices[1], triangleVertices[2]);
-            var interpolatedUV = barycentric.x * _uvs[indices[0]] 
-                                 + barycentric.y * _uvs[indices[1]] 
-                                 + barycentric.z * _uvs[indices[2]];
-            var interpolatedNormal = barycentric.x * _normals[indices[0]] 
-                                     + barycentric.y * _normals[indices[1]] 
-                                     + barycentric.z * _normals[indices[2]];
+            var interpolatedUV = barycentric.x * _uvs[indices[0]] + barycentric.y * _uvs[indices[1]] + barycentric.z * _uvs[indices[2]];
+            var interpolatedNormal = barycentric.x * _normals[indices[0]] + barycentric.y * _normals[indices[1]] + barycentric.z * _normals[indices[2]];
             interpolatedNormal.Normalize();
 
             var color = _mainTexture.GetPixelBilinear(interpolatedUV.x, interpolatedUV.y);

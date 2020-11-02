@@ -71,7 +71,7 @@ namespace SVO
         protected abstract void OnFillSubmesh(int submesh);
 
         protected abstract Tuple<Color, int[]> GenerateAttributes(Vector3[] triangleVertices, int[] indices,
-            Bounds voxelObjBounds, Bounds voxelWorldBounds, float octreeSize, Vector3 octreeCenter);
+            Bounds voxelLocalBounds, Bounds voxelMeshBounds, float octreeSize, Vector3 octreeCenter);
         
         private Bounds FindIdealOctreeBounds()
         {
