@@ -72,6 +72,7 @@
                 if(ray_hit.world_position.x != -1.f)
                 {
                     float3 normal = decode_normal(octree_attrib_data[ray_hit.shading_data_ptr]);
+                    normal = UnityObjectToWorldNormal(normal);
                     half light0Strength = max(0, dot(normal, _WorldSpaceLightPos0.xyz));
 
                     float3 world_view_dir = normalize(UnityWorldSpaceViewDir(ray_hit.world_position));
