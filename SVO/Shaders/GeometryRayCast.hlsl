@@ -38,7 +38,7 @@ ray_hit cast_ray(ray world_ray,
     ray.direction = mul(world_to_object, float4(ray.direction, 0));
     ray.direction = normalize(ray.direction);
     ray.origin = mul(world_to_object, float4(ray.origin, 1));
-    // Calculations assume octree voxels are in [1, 2) but mesh is in [-.5, .5]. This corrects that.
+    // Calculations assume octree voxels are in [1, 2) but object is in [-.5, .5]. This corrects that.
     ray.origin += 1.5;
     
     static const int max_depth = 23;
@@ -111,7 +111,7 @@ ray_hit cast_ray(ray world_ray,
             if(sign_mask >> 2 != 0) mirrored_path.x = 3.f - next_path.x;
             if(sign_mask >> 1 & 1 != 0) mirrored_path.y = 3.f - next_path.y;
             if(sign_mask & 1 != 0) mirrored_path.z = 3.f - next_path.z;
-            hit.world_position = mul(object_to_world, mirrored_path - 1.5f);
+            hit.world_position = mul(object_to_world, float4(mirrored_path - 1.5f, 1.f));
             
             return hit;
         }

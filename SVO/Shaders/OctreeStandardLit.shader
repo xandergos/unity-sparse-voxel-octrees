@@ -82,11 +82,11 @@
                     o.color = ray_hit.color * light0Strength;
                     o.color.rgb += ShadeSH3Order(half4(normal, 1));
                     o.color.rgb += spec;
-                    float4 clip_pos = mul(UNITY_MATRIX_VP, float4(ray_hit.world_position, 1.0));
+                    float4 clip_pos = UnityWorldToClipPos(ray_hit.world_position);
 
                     o.depth = clip_pos.z / clip_pos.w;
                     #if defined(SHADER_API_GLCORE) || defined(SHADER_API_OPENGL) || \
-                        defined(SHADER_API_GLES) ||  defined(SHADER_API_GLES3)
+                        defined(SHADER_API_GLES) || defined(SHADER_API_GLES3)
                         o.depth = (o.depth + 1.0) * 0.5;
                     #endif
                     

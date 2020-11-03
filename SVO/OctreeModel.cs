@@ -16,7 +16,7 @@ namespace SVO
         private void OnWillRenderObject()
         {
             var material = GetComponent<Renderer>().sharedMaterial;
-            if (data is null)
+            if (data == null)
             {
                 material.SetInt(Initialized, 0);
             }
@@ -27,6 +27,12 @@ namespace SVO
                 material.SetBuffer(OctreeAttribData, data.AttributeBuffer);
                 material.SetInt(Initialized, 1);
             }
+        }
+
+        private void OnDestroy()
+        {
+            var material = GetComponent<Renderer>().sharedMaterial;
+            material.SetInt(Initialized, 0);
         }
     }
 }
