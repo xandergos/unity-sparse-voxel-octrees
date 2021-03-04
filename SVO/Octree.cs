@@ -1,66 +1,53 @@
-﻿﻿using System;
+﻿/*
+ *  Unity Sparse Voxel Octrees
+ *  Copyright (C) 2021  Alexander Goslin
+ *
+ *  This program is free software: you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation, either version 3 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+using System;
 using System.Collections.Generic;
-using System.IO;
-using JetBrains.Annotations;
 using UnityEngine;
- using UnityEngine.Serialization;
- using Random = UnityEngine.Random;
 
 namespace SVO
 {
-    public class OctreeData: MonoBehaviour
+    public class Octree
     {
-        private ComputeBuffer _structureBuffer;
-        private ComputeBuffer _attributeBuffer;
-        public ComputeBuffer StructureBuffer
-        {
-            get
-            {
-                if (_dirty) ReloadBuffers();
-                return _structureBuffer;
-            }
-        }
-        public ComputeBuffer AttributeBuffer
-        {
-            get
-            {
-                if (_dirty) ReloadBuffers();
-                return _attributeBuffer;
-            }
-        }
-        
         // These lists are effectively unmanaged memory blocks. This allows for a simple transition from CPU to GPU memory,
         // and is much faster for the C# gc to deal with.
-        [SerializeField][HideInInspector]
+        public Texture3D Data { get; private set; }
+
         internal List<int> structureData = new List<int>(new[] { 1 << 31 });
-        [SerializeField][HideInInspector]
         internal List<int> attributeData = new List<int>(new[] { 0 });
 
-        [SerializeField][HideInInspector]
         internal List<int> freeStructureMemory = new List<int>();
-        [SerializeField][HideInInspector]
         internal List<int> freeAttributeMemory = new List<int>();
-
-        private bool _dirty = true;
 
         private int[] _ptrStack = new int[24];
         private Vector3 _ptrStackPos = Vector3.one;
         private int _ptrStackDepth;
 
-        public OctreeData()
+        public Octree(Texture3D data)
         {
-            _ptrStack[0] = 0; 
+            _ptrStack[0] = 0;
+            Data = data;
         }
 
-        /// <summary>
-        /// Removes all octree data from memory. It must be retrieved again anytime its needed, such as for
-        /// ray-casting or setting voxels.
-        /// </summary>
-        public void ClearCpuMemory()
+        public Octree()
         {
-            if(_dirty) ReloadBuffers();
-            structureData = null;
-            attributeData = null;
+            _ptrStack[0] = 0;
+            Data = null;
         }
         
         /// <summary>
@@ -86,17 +73,13 @@ namespace SVO
         {
             unsafe int AsInt(float f) => *(int*)&f;
             int FirstSetHigh(int i) => (AsInt(i) >> 23) - 127;
-
-            if (structureData is null || attributeData is null) RetrieveBuffers();
             
             var internalAttributes = new int[attributes.Length + 1];
-            internalAttributes[0] |= (attributes.Length + 1) << 24;
+            internalAttributes[0] |= (int)(color.a * 255) << 24;
             internalAttributes[0] |= (int)(color.r * 255) << 16;
             internalAttributes[0] |= (int)(color.g * 255) << 8;
             internalAttributes[0] |= (int)(color.b * 255) << 0;
             for (var i = 0; i < attributes.Length; i++) internalAttributes[i + 1] = attributes[i];
-
-            _dirty = true;
             
             Debug.Assert(position.x < 2 && position.x >= 1);
             Debug.Assert(position.y < 2 && position.y >= 1);
@@ -212,8 +195,6 @@ namespace SVO
             unsafe int AsInt(float f) => *(int*)&f;
             unsafe float AsFloat(int i) => *(float*)&i;
             int FirstSetHigh(int i) => (AsInt(i) >> 23) - 127;
-
-            if (structureData is null || attributeData is null) RetrieveBuffers();
             
             ray.direction.Scale(new Vector3(1 / octreeScale.x, 1 / octreeScale.y, 1 / octreeScale.z));
             ray.direction.Normalize();
@@ -304,7 +285,7 @@ namespace SVO
                     int shadingPtr = structureData[ptr] & 0x7FFFFFFF;
                     
                     int colorData = attributeData[shadingPtr];
-                    hit.Color = new Color((colorData >> 16 & 0xFF) / 255f, (colorData >> 8 & 0xFF) / 255f, (colorData & 0xFF) / 255f);
+                    hit.color = new Color((colorData >> 16 & 0xFF) / 255f, (colorData >> 8 & 0xFF) / 255f, (colorData & 0xFF) / 255f);
                     
                     // Normals transformed to [0, 1] range
                     int normalData = attributeData[shadingPtr + 1];
@@ -333,7 +314,7 @@ namespace SVO
                             break;
                     }
                     normal.Normalize();
-                    hit.Normal = normal;
+                    hit.normal = normal;
 
                     // Undo coordinate mirroring in next_path
                     Vector3 mirroredPath = nextPath;
@@ -341,10 +322,10 @@ namespace SVO
                     if(signMask >> 2 != 0) mirroredPath.x = 3f - nextPath.x;
                     if((signMask >> 1 & 1) != 0) mirroredPath.y = 3f - nextPath.y;
                     if((signMask & 1) != 0) mirroredPath.z = 3f - nextPath.z;
-                    hit.OctreePosition = mirroredPath;
-                    hit.WorldPosition = mirroredPath - Vector3.one * 1.5f;
-                    hit.WorldPosition.Scale(octreeScale);
-                    hit.WorldPosition += octreePos;
+                    hit.octreePosition = mirroredPath;
+                    hit.worldPosition = mirroredPath - Vector3.one * 1.5f;
+                    hit.worldPosition.Scale(octreeScale);
+                    hit.worldPosition += octreePos;
                     
                     var xNear = AsFloat(AsInt(stackPath.x) + (1 << (23 - depth)));
                     var yNear = AsFloat(AsInt(stackPath.y) + (1 << (23 - depth)));
@@ -354,33 +335,33 @@ namespace SVO
                     var tzMin = (zNear - rayOrigin.z) / ray.direction.z;
                     var tMin = Mathf.Max(Mathf.Max(txMin, tyMin), tzMin);
 
-                    hit.FaceNormal = Vector3.zero;
+                    hit.faceNormal = Vector3.zero;
                     if (txMin >= tMin)
                     {
-                        hit.OctreePosition.x = xNear;
+                        hit.octreePosition.x = xNear;
                         if ((signMask & 4) != 0)
                         {
-                            hit.OctreePosition.x = 3f - hit.OctreePosition.x;
+                            hit.octreePosition.x = 3f - hit.octreePosition.x;
                         }
-                        hit.FaceNormal.x = (signMask & 4) == 0 ? 1 : -1;
+                        hit.faceNormal.x = (signMask & 4) == 0 ? 1 : -1;
                     }
                     else if (tyMin >= tMin)
                     {
-                        hit.OctreePosition.y = yNear;
+                        hit.octreePosition.y = yNear;
                         if ((signMask & 2) != 0)
                         {
-                            hit.OctreePosition.y = 3f - hit.OctreePosition.y;
+                            hit.octreePosition.y = 3f - hit.octreePosition.y;
                         }
-                        hit.FaceNormal.y = (signMask & 2) == 0 ? 1 : -1;
+                        hit.faceNormal.y = (signMask & 2) == 0 ? 1 : -1;
                     }
                     else if (tzMin >= tMin)
                     {
-                        hit.OctreePosition.z = zNear;
+                        hit.octreePosition.z = zNear;
                         if ((signMask & 1) != 0)
                         {
-                            hit.OctreePosition.z = 3f - hit.OctreePosition.z;
+                            hit.octreePosition.z = 3f - hit.octreePosition.z;
                         }
-                        hit.FaceNormal.z = (signMask & 1) == 0 ? 1 : -1;
+                        hit.faceNormal.z = (signMask & 1) == 0 ? 1 : -1;
                     }
                     
                     return hit;
@@ -438,54 +419,52 @@ namespace SVO
             return endPtr;
         }
 
-        private void ReloadBuffers()
+        public Texture3D Apply(bool tryReuseOldTexture)
         {
             Debug.Assert(!(structureData is null) && !(attributeData is null));
+            var structureDepth = Mathf.NextPowerOfTwo(Mathf.CeilToInt(Mathf.CeilToInt((float) structureData.Count / 2048 / 2048)));
+            var attributeDepth = Mathf.NextPowerOfTwo(Mathf.CeilToInt((float) (attributeData.Count + 1) / 2048 / 2048)); // Add one for structure depth
             
-            _dirty = false;
-            if (_structureBuffer?.count != structureData.Count)
+            if (Data is null || structureDepth + attributeDepth != Data.depth && tryReuseOldTexture)
             {
-                _structureBuffer?.Release();
-                _structureBuffer = new ComputeBuffer(structureData.Count, 4);
+                Data = new Texture3D(2048, 2048, structureDepth + attributeDepth, TextureFormat.RFloat, false);
             }
-            _structureBuffer.SetData(structureData);
 
-            if (_attributeBuffer?.count != attributeData.Count)
+            for (var i = 0; i < structureDepth; i++)
             {
-                _attributeBuffer?.Release();
-                _attributeBuffer = new ComputeBuffer(attributeData.Count, 4);
+                var minIndex = i * 2048 * 2048;
+                var maxIndex = (i + 1) * 2048 * 2048;
+                if (minIndex > structureData.Count) minIndex = structureData.Count;
+                if (maxIndex > structureData.Count) maxIndex = structureData.Count;
+                
+                if (minIndex >= maxIndex) break;
+                var block = new int[2048 * 2048];
+                structureData.CopyTo(minIndex, block, 0, maxIndex - minIndex);
+                var tempTex = new Texture3D(2048, 2048, 1, TextureFormat.RFloat, false);
+                tempTex.SetPixelData(block, 0);
+                tempTex.Apply();
+                Graphics.CopyTexture(tempTex, 0, 0, 0, 0, 2048, 2048, Data, i, 0, 0, 0);
+                
             }
-            _attributeBuffer.SetData(attributeData);
-        }
-
-        private void RetrieveBuffers()
-        {
-            var structureDataArr = new int[_structureBuffer.count];
-            var attributeDataArr = new int[_attributeBuffer.count];
-            _structureBuffer.GetData(structureDataArr);
-            _attributeBuffer.GetData(attributeDataArr);
-            structureData = new List<int>(structureDataArr);
-            attributeData = new List<int>(attributeDataArr);
-        }
-
-        /// <summary>
-        /// Sets the octree data to be a singular clear voxel.
-        /// </summary>
-        public void Clear()
-        {
-            structureData = new List<int>(new[] { 1 << 31 });
-            attributeData = new List<int>(new[] { 0 });
-            freeStructureMemory = new List<int>();
-            freeAttributeMemory = new List<int>();
-            _ptrStack = new int[24];
-            _ptrStackPos = Vector3.one;
-            _ptrStackDepth = 0;
-        }
-
-        private void OnDestroy()
-        {
-            _structureBuffer?.Release();
-            _attributeBuffer?.Release();
+            
+            for (var i = 0; i < attributeDepth; i++)
+            {
+                var minIndex = i * 2048 * 2048;
+                var maxIndex = (i + 1) * 2048 * 2048;
+                if (minIndex > attributeData.Count) minIndex = attributeData.Count;
+                if (maxIndex > attributeData.Count) maxIndex = attributeData.Count;
+                
+                var block = new int[2048 * 2048];
+                if (minIndex < maxIndex)
+                    attributeData.CopyTo(minIndex, block, 0, maxIndex - minIndex);
+                if (i == attributeDepth - 1) block[block.Length - 1] = structureDepth;
+                var tempTex = new Texture3D(2048, 2048, 1, TextureFormat.RFloat, false);
+                tempTex.SetPixelData(block, 0);
+                tempTex.Apply();
+                Graphics.CopyTexture(tempTex, 0, 0, 0, 0, 2048, 2048, Data, i + structureDepth, 0, 0, 0);
+            }
+            Data.IncrementUpdateCount();
+            return Data;
         }
     }
 }

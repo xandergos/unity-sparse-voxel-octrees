@@ -1,8 +1,27 @@
-﻿Shader "Octree/OctreeStandardLit"
+﻿/*
+ *  Unity Sparse Voxel Octrees
+ *  Copyright (C) 2021  Alexander Goslin
+ *
+ *  This program is free software: you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation, either version 3 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+Shader "Octree/OctreeStandardLit"
 {
     Properties
     {
         _Shininess ("Shininess", Range(0, 1))=1
+        [MainTexture] [NoScaleOffset] _Volume ("Volume", 3D) = "" {}
     }
     SubShader
     {
@@ -20,20 +39,18 @@
 
             #pragma vertex vert
             #pragma fragment frag
-            uniform StructuredBuffer<int> octree_primary_data;
-            uniform StructuredBuffer<int> octree_attrib_data;
-            uniform int initialized = 0;
-
+            
             float _Shininess;
+            Texture3D<int> _Volume;
 
             struct v2f
             {
                 float4 pos : SV_POSITION;
-                float3 worldPos : TEXCOORD0;
-                float3 worldScale : TEXCOORD1;
+                float3 world_pos : TEXCOORD0;
+                float3 world_scale : TEXCOORD1;
             };
 
-            struct fragOut
+            struct frag_out
             {
                 half4 color : SV_Target0;
                 float depth : SV_Depth;
@@ -43,46 +60,61 @@
             {
                 v2f o;
                 o.pos = UnityObjectToClipPos(v.vertex);
-                o.worldPos = mul(unity_ObjectToWorld, v.vertex).xyz;
+                o.world_pos = mul(unity_ObjectToWorld, v.vertex).xyz;
                 
-                float3 worldScale = float3(
+                float3 world_scale = float3(
                     length(unity_ObjectToWorld._m00_m10_m20),
                     length(unity_ObjectToWorld._m01_m11_m21),
                     length(unity_ObjectToWorld._m02_m12_m22)
                 );
-                o.worldScale = worldScale;
+                o.world_scale = world_scale;
                 
                 return o;
             }
             
-            fragOut frag(v2f i)
+            frag_out frag(v2f i)
             {
-                fragOut o;
-                if(initialized == 0)
+                frag_out o;
+                
+                int structure_depth = get_structure_depth(_Volume);
+                if(structure_depth <= 0 || structure_depth >= 2048)
                 {
-                    clip(-1.f);
+                    clip(-1);
                     return o;
                 }
+                
                 float3 camera_pos = unity_CameraToWorld._m03_m13_m23;
                 ray ray;
-                ray.direction = normalize(i.worldPos - camera_pos);
-                ray.origin = camera_pos;
-
-                ray_hit ray_hit = cast_ray(ray, unity_ObjectToWorld, unity_WorldToObject, octree_primary_data, octree_attrib_data);
-                if(ray_hit.world_position.x != -1.f)
+                if(UNITY_MATRIX_P[3][3] == 1.f)
                 {
-                    float3 normal = decode_normal(octree_attrib_data[ray_hit.shading_data_ptr]);
+                    float3 cam_dir = unity_CameraToWorld._m02_m12_m22;
+                    ray.origin = i.world_pos - cam_dir * 100;
+                    ray.dir = cam_dir;
+                    ray.inv_dir = 1 / ray.dir;
+                }
+                else
+                {
+                    ray.dir = normalize(i.world_pos - camera_pos);
+                    ray.inv_dir = 1 / ray.dir;
+                    ray.origin = camera_pos;
+                }
+                float4 color;
+                float3 world_pos;
+                int shading_data_ptr;
+                if(cast_ray(ray, unity_ObjectToWorld, unity_WorldToObject, _Volume, color, world_pos, shading_data_ptr))
+                {
+                    float3 normal = decode_normal(sample_attrib(_Volume, shading_data_ptr, get_structure_depth(_Volume)));
                     normal = UnityObjectToWorldNormal(normal);
                     half light0Strength = max(0, dot(normal, _WorldSpaceLightPos0.xyz));
 
-                    float3 world_view_dir = normalize(UnityWorldSpaceViewDir(ray_hit.world_position));
+                    float3 world_view_dir = normalize(UnityWorldSpaceViewDir(world_pos));
                     float3 world_refl = reflect(-world_view_dir, normal);
                     half3 spec = float3(1.f, 1.f, 1.f) * _Shininess * pow(max(0, dot(world_refl, _WorldSpaceLightPos0.xyz)), 32);
                     
-                    o.color = ray_hit.color * light0Strength;
+                    o.color = color * light0Strength;
                     o.color.rgb += ShadeSH3Order(half4(normal, 1));
                     o.color.rgb += spec;
-                    float4 clip_pos = UnityWorldToClipPos(ray_hit.world_position);
+                    float4 clip_pos = UnityWorldToClipPos(world_pos);
 
                     o.depth = clip_pos.z / clip_pos.w;
                     #if defined(SHADER_API_GLCORE) || defined(SHADER_API_OPENGL) || \
@@ -90,7 +122,6 @@
                         o.depth = (o.depth + 1.0) * 0.5;
                     #endif
                     
-                    clip(1.f);
                     return o;
                 }
                 clip(-1.f);
@@ -98,6 +129,86 @@
             }
 
             ENDHLSL
+        }
+        
+        // shadow caster rendering pass, implemented manually
+        // using macros from UnityCG.cginc
+        Pass
+        {
+            Tags {"LightMode"="ShadowCaster"}
+
+            ZWrite On
+            Cull Front
+            
+            CGPROGRAM
+            #pragma vertex vert
+            #pragma fragment frag
+            #pragma multi_compile_shadowcaster
+            #include "UnityCG.cginc"
+            #include "GeometryRayCast.hlsl"
+
+            Texture3D<int> _Volume;
+            
+            struct v2f
+            {
+                V2F_SHADOW_CASTER;
+                float3 world_pos : TEXCOORD1;
+                float3 world_scale : TEXCOORD2;
+                float3 normal : TEXCOORD3;
+            };
+
+            v2f vert(appdata_base v)
+            {
+                v2f o;
+                o.pos = UnityObjectToClipPos(v.vertex);
+                o.world_pos = mul(unity_ObjectToWorld, v.vertex).xyz;
+                
+                float3 world_scale = float3(
+                    length(unity_ObjectToWorld._m00_m10_m20),
+                    length(unity_ObjectToWorld._m01_m11_m21),
+                    length(unity_ObjectToWorld._m02_m12_m22)
+                );
+                o.world_scale = world_scale;
+
+                o.normal = v.normal;
+                
+                return o;
+            }
+
+            void frag(v2f i, out float4 out_color : SV_Target, out float out_depth : SV_Depth)
+            {
+                int structure_depth = get_structure_depth(_Volume);
+                if(structure_depth <= 0 || structure_depth >= 2048)
+                {
+                    clip(-1);
+                    return;
+                }
+                
+                ray ray;
+                float3 light_dir = normalize(-UNITY_MATRIX_V[2].xyz);
+                ray.origin = i.world_pos - light_dir * 50;
+                ray.dir = light_dir;
+                ray.inv_dir = 1 / ray.dir;
+
+                float4 color;
+                float3 world_pos;
+                int shading_data_ptr;
+                if(!cast_ray(ray, unity_ObjectToWorld, unity_WorldToObject, _Volume, color, world_pos, shading_data_ptr))
+                {
+                    clip(-1);
+                    return;
+                }
+
+                float4 shadow_pos = UnityClipSpaceShadowCasterPos(world_pos, i.normal);
+                shadow_pos = UnityApplyLinearShadowBias(shadow_pos);
+
+                out_color = out_depth = shadow_pos.z / shadow_pos.w;
+                #if defined(SHADER_API_GLCORE) || defined(SHADER_API_OPENGL) || \
+                    defined(SHADER_API_GLES) || defined(SHADER_API_GLES3)
+                    outColor = outDepth = (outDepth + 1.0) * 0.5;
+                #endif
+            }
+            ENDCG
         }
     }
 }

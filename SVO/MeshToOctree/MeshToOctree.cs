@@ -1,5 +1,24 @@
-﻿using System;
+﻿/*
+ *  Unity Sparse Voxel Octrees
+ *  Copyright (C) 2021  Alexander Goslin
+ *
+ *  This program is free software: you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation, either version 3 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+using System;
 using System.Collections.Generic;
+using UnityEditor;
 using UnityEngine;
 
 namespace SVO
@@ -9,30 +28,24 @@ namespace SVO
         public Mesh mesh;
         public float voxelSize;
         public Material material;
-        public GameObject Generate()
+        public void Generate()
         {
             var idealBounds = FindIdealOctreeBounds();   
-            var octreeObj = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            octreeObj.transform.position = idealBounds.center;
-            octreeObj.transform.localScale = idealBounds.size;
 
             var depth = Mathf.RoundToInt(Mathf.Log(idealBounds.size.x / voxelSize, 2));
 
             if (depth > 12)
                 throw new NotSupportedException("Octree voxel size is too small. Please split the mesh.");
-            
-            var octreeData = octreeObj.AddComponent<OctreeData>();
+
+            var octreeData = new Octree();
             for (var submesh = 0; submesh < mesh.subMeshCount; submesh++)
             {
                 FillSubmesh(octreeData, depth, submesh, idealBounds.size.x, idealBounds.center);
             }
-
-            var model = octreeObj.AddComponent<OctreeModel>();
-            model.data = octreeData;
-            return octreeObj;
+            AssetDatabase.CreateAsset(octreeData.Apply(true), "Assets/mesh.asset");
         }
 
-        private void FillSubmesh(OctreeData data, int depth, int submesh, float octreeSize, Vector3 octreeCenter)
+        private void FillSubmesh(Octree data, int depth, int submesh, float octreeSize, Vector3 octreeCenter)
         {
             OnFillSubmesh(submesh);
             
@@ -92,6 +105,7 @@ namespace SVO
             octreeSize *= 2;
             
             // Make octreeSize the smallest number for which voxelSize * 2^n exists for some natural number n
+            // Makes sure that a voxel of voxelSize can actually be made.
             octreeSize = Mathf.NextPowerOfTwo(Mathf.CeilToInt(octreeSize / voxelSize)) * voxelSize;
             
             return new Bounds(octreePos, Vector3.one * octreeSize);
