@@ -1,6 +1,6 @@
 # Unity Sparse Voxel Octrees
 
-A new, unfinished method of rendering voxels using Sparse Voxel Octrees as seen in [Nvidia's paper: "Efficient Sparse Voxel Octrees – Analysis, Extensions, and Implementation"](https://www.nvidia.com/docs/IO/88972/nvr-2010-001.pdf).
+A Unity-based method of rendering voxels using Sparse Voxel Octrees as seen in [Nvidia's paper: "Efficient Sparse Voxel Octrees – Analysis, Extensions, and Implementation"](https://www.nvidia.com/docs/IO/88972/nvr-2010-001.pdf). Project is still a WIP. When a stable or beta build is completed it will be found in the "releases" section.
 
 ## Installation
 
