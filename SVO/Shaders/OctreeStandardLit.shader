@@ -25,12 +25,15 @@ Shader "Octree/OctreeStandardLit"
     }
     SubShader
     {
-        Tags { "RenderType"="Opaque" }
+        Tags { "Queue"="Transparent" }
+        
+        Cull Front
 
         Pass
         {
+            Tags { "RenderType"="Transparent" }
+            
             ZWrite On
-            Cull Front
 
             HLSLPROGRAM
 
@@ -47,7 +50,6 @@ Shader "Octree/OctreeStandardLit"
             {
                 float4 pos : SV_POSITION;
                 float3 world_pos : TEXCOORD0;
-                float3 world_scale : TEXCOORD1;
             };
 
             struct frag_out
@@ -61,13 +63,6 @@ Shader "Octree/OctreeStandardLit"
                 v2f o;
                 o.pos = UnityObjectToClipPos(v.vertex);
                 o.world_pos = mul(unity_ObjectToWorld, v.vertex).xyz;
-                
-                float3 world_scale = float3(
-                    length(unity_ObjectToWorld._m00_m10_m20),
-                    length(unity_ObjectToWorld._m01_m11_m21),
-                    length(unity_ObjectToWorld._m02_m12_m22)
-                );
-                o.world_scale = world_scale;
                 
                 return o;
             }
@@ -90,12 +85,10 @@ Shader "Octree/OctreeStandardLit"
                     float3 cam_dir = unity_CameraToWorld._m02_m12_m22;
                     ray.origin = i.world_pos - cam_dir * 100;
                     ray.dir = cam_dir;
-                    ray.inv_dir = 1 / ray.dir;
                 }
                 else
                 {
                     ray.dir = normalize(i.world_pos - camera_pos);
-                    ray.inv_dir = 1 / ray.dir;
                     ray.origin = camera_pos;
                 }
                 float4 color;
@@ -131,14 +124,9 @@ Shader "Octree/OctreeStandardLit"
             ENDHLSL
         }
         
-        // shadow caster rendering pass, implemented manually
-        // using macros from UnityCG.cginc
         Pass
         {
             Tags {"LightMode"="ShadowCaster"}
-
-            ZWrite On
-            Cull Front
             
             CGPROGRAM
             #pragma vertex vert
@@ -153,8 +141,6 @@ Shader "Octree/OctreeStandardLit"
             {
                 V2F_SHADOW_CASTER;
                 float3 world_pos : TEXCOORD1;
-                float3 world_scale : TEXCOORD2;
-                float3 normal : TEXCOORD3;
             };
 
             v2f vert(appdata_base v)
@@ -162,15 +148,6 @@ Shader "Octree/OctreeStandardLit"
                 v2f o;
                 o.pos = UnityObjectToClipPos(v.vertex);
                 o.world_pos = mul(unity_ObjectToWorld, v.vertex).xyz;
-                
-                float3 world_scale = float3(
-                    length(unity_ObjectToWorld._m00_m10_m20),
-                    length(unity_ObjectToWorld._m01_m11_m21),
-                    length(unity_ObjectToWorld._m02_m12_m22)
-                );
-                o.world_scale = world_scale;
-
-                o.normal = v.normal;
                 
                 return o;
             }
@@ -188,7 +165,6 @@ Shader "Octree/OctreeStandardLit"
                 float3 light_dir = normalize(-UNITY_MATRIX_V[2].xyz);
                 ray.origin = i.world_pos - light_dir * 50;
                 ray.dir = light_dir;
-                ray.inv_dir = 1 / ray.dir;
 
                 float4 color;
                 float3 world_pos;
@@ -199,8 +175,7 @@ Shader "Octree/OctreeStandardLit"
                     return;
                 }
 
-                float4 shadow_pos = UnityClipSpaceShadowCasterPos(world_pos, i.normal);
-                shadow_pos = UnityApplyLinearShadowBias(shadow_pos);
+                float4 shadow_pos = UnityWorldToClipPos(world_pos);
 
                 out_color = out_depth = shadow_pos.z / shadow_pos.w;
                 #if defined(SHADER_API_GLCORE) || defined(SHADER_API_OPENGL) || \

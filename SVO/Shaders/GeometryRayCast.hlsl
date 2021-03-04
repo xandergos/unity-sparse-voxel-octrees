@@ -1,27 +1,27 @@
 ﻿/*
-*  Unity Sparse Voxel Octrees
-*  Copyright (C) 2021  Alexander Goslin
-*
-*  This program is free software: you can redistribute it and/or modify
-*  it under the terms of the GNU General Public License as published by
-*  the Free Software Foundation, either version 3 of the License, or
-*  (at your option) any later version.
-*
-*  This program is distributed in the hope that it will be useful,
-*  but WITHOUT ANY WARRANTY; without even the implied warranty of
-*  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-*  GNU General Public License for more details.
-*
-*  You should have received a copy of the GNU General Public License
-*  along with this program.  If not, see <https://www.gnu.org/licenses/>.
-*/
+ *  Unity Sparse Voxel Octrees
+ *  Copyright (C) 2021  Alexander Goslin
+ *
+ *  This program is free software: you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation, either version 3 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 
 #define POINTER_TYPE 0
 #define VOXEL_TYPE 1
 
-#define GET_TYPE(data) data >> 31 & 1;
-#define GET_SHADING_PTR(data) data & 0x7FFFFFFF;
-#define IS_EMPTY_VOXEL(data) (data == (1 << 31));
+#define GET_TYPE(structure_data) (structure_data >> 31 & 1)
+#define GET_SHADING_PTR(structure_data) (structure_data & 0x7FFFFFFF)
+#define IS_EMPTY_VOXEL(structure_data) (structure_data == (1 << 31))
 
 #include "Util.hlsl"
 
@@ -84,7 +84,7 @@ bool cast_ray(ray world_ray,
     if(ray.dir.z > 0.f) sign_mask ^= 1, ray.origin.z = 3.f - ray.origin.z;
 
     ray.dir = -abs(ray.dir);
-    ray.inv_dir = -abs(ray.inv_dir);
+    ray.inv_dir = -abs(1 / ray.dir);
     
     // Get intersections of chunk (if hit)
     float3 root_min_distances = (2.f - ray.origin) * ray.inv_dir;
@@ -112,28 +112,29 @@ bool cast_ray(ray world_ray,
         const int first_set = 23 - firstbithigh(differing_bits);
         int depth = min(first_set - 1, stack_depth);
         int ptr = stack[depth];
-        int type = GET_TYPE(sample_structure(volume, ptr));
+        int structure_data = sample_structure(volume, ptr);
+        int type = GET_TYPE(structure_data);
         while(type == POINTER_TYPE)
         {
-            ptr = sample_structure(volume, ptr);
+            ptr = structure_data;
             depth++;
-            const int xm = (asint(next_path.x) >> 23 - depth) & 1; // 1 or 0 for sign of movement in x direction
-            const int ym = (asint(next_path.y) >> 23 - depth) & 1; // 1 or 0 for sign of movement in y direction
-            const int zm = (asint(next_path.z) >> 23 - depth) & 1; // 1 or 0 for sign of movement in z direction
+            const int xm = (asint(next_path.x) >> (23 - depth)) & 1; // 1 or 0 for sign of movement in x direction
+            const int ym = (asint(next_path.y) >> (23 - depth)) & 1; // 1 or 0 for sign of movement in y direction
+            const int zm = (asint(next_path.z) >> (23 - depth)) & 1; // 1 or 0 for sign of movement in z direction
             int child_index = (xm << 2) + (ym << 1) + zm;
             child_index ^= sign_mask;
             ptr += child_index;
             stack[depth] = ptr;
-            type = GET_TYPE(sample_structure(volume, ptr));
+            structure_data = sample_structure(volume, ptr); // Follow ptr
+            type = GET_TYPE(structure_data);
         }
         stack_depth = depth;
         stack_path = asfloat(asint(next_path) & ~((1 << 23 - depth) - 1)); // Remove unused bits
         
         // Return hit if voxel is solid
-        bool isEmpty = IS_EMPTY_VOXEL(sample_structure(volume, ptr));
-        if(type == VOXEL_TYPE && !isEmpty)
+        if(type == VOXEL_TYPE && !IS_EMPTY_VOXEL(structure_data))
         {
-            const int shading_ptr = GET_SHADING_PTR(sample_structure(volume, ptr));
+            const int shading_ptr = GET_SHADING_PTR(structure_data);
 
             const int color_data = sample_attrib(volume, shading_ptr, structure_depth);
             shading_data_ptr = shading_ptr + 1;
