@@ -28,15 +28,17 @@ namespace SVO
         // and is much faster for the C# gc to deal with.
         public Texture3D Data { get; private set; }
 
-        internal List<int> structureData = new List<int>(new[] { 1 << 31 });
-        internal List<int> attributeData = new List<int>(new[] { 0 });
+        private readonly List<int> _structureData = new List<int>(new[] { 1 << 31 });
+        private readonly List<int> _attributeData = new List<int>(new[] { 0 });
 
-        internal List<int> freeStructureMemory = new List<int>();
-        internal List<int> freeAttributeMemory = new List<int>();
+        private readonly List<int> _freeStructureMemory = new List<int>();
+        private readonly List<int> _freeAttributeMemory = new List<int>();
 
-        private int[] _ptrStack = new int[24];
+        private readonly int[] _ptrStack = new int[24];
         private Vector3 _ptrStackPos = Vector3.one;
         private int _ptrStackDepth;
+
+        private Dictionary<int, bool> _dirty = new Dictionary<int, bool>();
 
         public Octree(Texture3D data)
         {
@@ -75,7 +77,7 @@ namespace SVO
             int FirstSetHigh(int i) => (AsInt(i) >> 23) - 127;
             
             var internalAttributes = new int[attributes.Length + 1];
-            internalAttributes[0] |= (int)(color.a * 255) << 24;
+            internalAttributes[0] |= attributes.Length + 1 << 24;
             internalAttributes[0] |= (int)(color.r * 255) << 16;
             internalAttributes[0] |= (int)(color.g * 255) << 8;
             internalAttributes[0] |= (int)(color.b * 255) << 0;
@@ -93,12 +95,12 @@ namespace SVO
             var stepDepth = Math.Min(Math.Min(firstSet - 1, _ptrStackDepth), depth);
             
             var ptr = _ptrStack[stepDepth];
-            var type = (structureData[ptr] >> 31) & 1; // Type of root node
+            var type = (_structureData[ptr] >> 31) & 1; // Type of root node
             // Step down one depth until a non-ptr node is hit or the max depth is reached.
             while(type == 0 && stepDepth < depth)
             {
                 // Descend to the next branch
-                ptr = structureData[ptr]; 
+                ptr = _structureData[ptr]; 
                 
                 // Step to next node
                 stepDepth++;
@@ -110,15 +112,15 @@ namespace SVO
                 _ptrStack[stepDepth] = ptr;
                 
                 // Get type of the node
-                type = (structureData[ptr] >> 31) & 1;
+                type = (_structureData[ptr] >> 31) & 1;
             }
             _ptrStackDepth = stepDepth;
             _ptrStackPos = position;
 
             // Pointer will be deleted, so all children must be as well.
-            if (type == 0) freeStructureMemory.Add(structureData[ptr]);
+            if (type == 0) _freeStructureMemory.Add(_structureData[ptr]);
 
-            var original = structureData[ptr];
+            var original = _structureData[ptr];
             int[] originalShadingData;
             if (type == 1 && original != 1 << 31)
             {
@@ -127,8 +129,8 @@ namespace SVO
                 var size = internalAttributes.Length;
                 originalShadingData = new int[size];
                 for (var i = 0; i < size; i++)
-                    originalShadingData[i] = attributeData[shadingPtr + i];
-                freeAttributeMemory.Add(shadingPtr);
+                    originalShadingData[i] = _attributeData[shadingPtr + i];
+                _freeAttributeMemory.Add(shadingPtr);
             }
             else originalShadingData = new int[0];
             while (stepDepth < depth)
@@ -136,23 +138,23 @@ namespace SVO
                 stepDepth++;
                 // Create another branch to go down another depth
                 // The last hit voxel MUST be type 1. Otherwise stepDepth == depth.
-                var branchPtr = structureData.Count;
-                if (freeStructureMemory.Count > 0)
+                var branchPtr = _structureData.Count;
+                if (_freeStructureMemory.Count > 0)
                 {
-                    branchPtr = freeStructureMemory[freeStructureMemory.Count - 1];
-                    freeStructureMemory.RemoveAt(freeStructureMemory.Count - 1);
+                    branchPtr = _freeStructureMemory[_freeStructureMemory.Count - 1];
+                    _freeStructureMemory.RemoveAt(_freeStructureMemory.Count - 1);
                 }
-                if (branchPtr == structureData.Count)
+                if (branchPtr == _structureData.Count)
                 {
                     for (var i = 0; i < 8; i++)
-                        structureData.Add((1 << 31) | AllocateAttributeData(originalShadingData));
+                        _structureData.Add((1 << 31) | AllocateAttributeData(originalShadingData));
                 }
                 else {
                     for (var i = 0; i < 8; i++)
-                        structureData[branchPtr + i] = (1 << 31) | AllocateAttributeData(originalShadingData);
+                        _structureData[branchPtr + i] = (1 << 31) | AllocateAttributeData(originalShadingData);
                 }
                 _ptrStack[stepDepth] = branchPtr;
-                structureData[ptr] = branchPtr;
+                _structureData[ptr] = branchPtr;
                 ptr = branchPtr;
                 
                 // Move to the position of the right child node.
@@ -162,7 +164,7 @@ namespace SVO
                 var childIndex = (xm << 2) + (ym << 1) + zm;
                 ptr += childIndex;
             }
-            structureData[ptr] = (1 << 31) | AllocateAttributeData(internalAttributes);
+            _structureData[ptr] = (1 << 31) | AllocateAttributeData(internalAttributes);
         }
 
         public void FillTriangle(Vector3[] vertices, int depth, Func<Bounds, Tuple<Color, int[]>> attributeGenerator)
@@ -257,10 +259,10 @@ namespace SVO
                 int firstSet = 23 - FirstSetHigh(differingBits);
                 int depth = Mathf.Min(firstSet - 1, stackDepth);
                 int ptr = stack[depth];
-                int type = structureData[ptr] >> 31 & 1;
+                int type = _structureData[ptr] >> 31 & 1;
                 while(type == 0)
                 {
-                    ptr = structureData[ptr];
+                    ptr = _structureData[ptr];
                     depth++;
                     int xm = AsInt(nextPath.x) >> 23 - depth & 1;
                     int ym = AsInt(nextPath.y) >> 23 - depth & 1;
@@ -269,7 +271,7 @@ namespace SVO
                     childIndex ^= signMask;
                     ptr += childIndex;
                     stack[depth] = ptr;
-                    type = structureData[ptr] >> 31 & 1;
+                    type = _structureData[ptr] >> 31 & 1;
                 }
                 stackDepth = depth;
                 // Remove unused bits
@@ -278,17 +280,17 @@ namespace SVO
                 stackPath.z = AsFloat(AsInt(nextPath.z) & ~((1 << 23 - depth) - 1));
                 
                 // Return hit if voxel is solid
-                if(type == 1 && structureData[ptr] != 1 << 31)
+                if(type == 1 && _structureData[ptr] != 1 << 31)
                 {
                     RayHit hit = new RayHit();
 
-                    int shadingPtr = structureData[ptr] & 0x7FFFFFFF;
+                    int shadingPtr = _structureData[ptr] & 0x7FFFFFFF;
                     
-                    int colorData = attributeData[shadingPtr];
+                    int colorData = _attributeData[shadingPtr];
                     hit.color = new Color((colorData >> 16 & 0xFF) / 255f, (colorData >> 8 & 0xFF) / 255f, (colorData & 0xFF) / 255f);
                     
                     // Normals transformed to [0, 1] range
-                    int normalData = attributeData[shadingPtr + 1];
+                    int normalData = _attributeData[shadingPtr + 1];
                     int normalSignBit = normalData >> 22 & 1;
                     int axis = normalData >> 20 & 3;
                     int comp2 = normalData >> 10 & 0x3FF;
@@ -397,10 +399,10 @@ namespace SVO
         {
             if (attributes.Count == 0) return 0;
             var index = 0;
-            foreach (var ptr in freeAttributeMemory)
+            foreach (var ptr in _freeAttributeMemory)
             {
-                var size = (uint)this.attributeData[ptr] >> 24;
-                if (size < attributes.Count)
+                var size = (uint)_attributeData[ptr] >> 24;
+                if (size != attributes.Count)
                 {
                     index++;
                     continue;
@@ -408,22 +410,22 @@ namespace SVO
                 
                 for (var i = 0; i < attributes.Count; i++)
                 {
-                    this.attributeData[ptr + i] = attributes[i];
+                    _attributeData[ptr + i] = attributes[i];
                 }
-                freeAttributeMemory.RemoveAt(index);
+                _freeAttributeMemory.RemoveAt(index);
                 return ptr;
             }
 
-            var endPtr = this.attributeData.Count;
-            this.attributeData.AddRange(attributes);
+            var endPtr = _attributeData.Count;
+            _attributeData.AddRange(attributes);
             return endPtr;
         }
 
         public Texture3D Apply(bool tryReuseOldTexture)
         {
-            Debug.Assert(!(structureData is null) && !(attributeData is null));
-            var structureDepth = Mathf.NextPowerOfTwo(Mathf.CeilToInt(Mathf.CeilToInt((float) structureData.Count / 2048 / 2048)));
-            var attributeDepth = Mathf.NextPowerOfTwo(Mathf.CeilToInt((float) (attributeData.Count + 1) / 2048 / 2048)); // Add one for structure depth
+            Debug.Assert(!(_structureData is null) && !(_attributeData is null));
+            var structureDepth = Mathf.NextPowerOfTwo(Mathf.CeilToInt(Mathf.CeilToInt((float) _structureData.Count / 2048 / 2048)));
+            var attributeDepth = Mathf.NextPowerOfTwo(Mathf.CeilToInt((float) (_attributeData.Count + 1) / 2048 / 2048)); // Add one for structure depth
             
             if (Data is null || structureDepth + attributeDepth != Data.depth && tryReuseOldTexture)
             {
@@ -434,12 +436,12 @@ namespace SVO
             {
                 var minIndex = i * 2048 * 2048;
                 var maxIndex = (i + 1) * 2048 * 2048;
-                if (minIndex > structureData.Count) minIndex = structureData.Count;
-                if (maxIndex > structureData.Count) maxIndex = structureData.Count;
+                if (minIndex > _structureData.Count) minIndex = _structureData.Count;
+                if (maxIndex > _structureData.Count) maxIndex = _structureData.Count;
                 
                 if (minIndex >= maxIndex) break;
                 var block = new int[2048 * 2048];
-                structureData.CopyTo(minIndex, block, 0, maxIndex - minIndex);
+                _structureData.CopyTo(minIndex, block, 0, maxIndex - minIndex);
                 var tempTex = new Texture3D(2048, 2048, 1, TextureFormat.RFloat, false);
                 tempTex.SetPixelData(block, 0);
                 tempTex.Apply();
@@ -451,12 +453,12 @@ namespace SVO
             {
                 var minIndex = i * 2048 * 2048;
                 var maxIndex = (i + 1) * 2048 * 2048;
-                if (minIndex > attributeData.Count) minIndex = attributeData.Count;
-                if (maxIndex > attributeData.Count) maxIndex = attributeData.Count;
+                if (minIndex > _attributeData.Count) minIndex = _attributeData.Count;
+                if (maxIndex > _attributeData.Count) maxIndex = _attributeData.Count;
                 
                 var block = new int[2048 * 2048];
                 if (minIndex < maxIndex)
-                    attributeData.CopyTo(minIndex, block, 0, maxIndex - minIndex);
+                    _attributeData.CopyTo(minIndex, block, 0, maxIndex - minIndex);
                 if (i == attributeDepth - 1) block[block.Length - 1] = structureDepth;
                 var tempTex = new Texture3D(2048, 2048, 1, TextureFormat.RFloat, false);
                 tempTex.SetPixelData(block, 0);
