@@ -10,10 +10,10 @@ Currently the only way to use the library is to download the files and compile t
 
 Place the SVO folder in your Unity Project. You must enable unsafe code: Project Settings > Player > Other Settings > Allow 'unsafe' Code.
 To get a simple octree working:
-- Attach an OctreeModel to a cube object.
-- Attach an OctreeData component to any object.
-- Attach the OctreeData component to the OctreeModel.
-- Edit OctreeData and changes will immediately appear in OctreeModel. This can be done using the MeshToOctreeStandard component or by editing it programatically.
+- Import any mesh you want
+- Add the MeshToOctree component to any GameObject
+- Select a mesh, the material of the model, and a reasonable voxel size.
+- Click convert and the octree in the form of a 3D texture will appear in the assets folder. This 3D texture can be used in a material that uses an octree shader.
 
 ## Limitations
 
