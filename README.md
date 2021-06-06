@@ -6,7 +6,7 @@ A Unity-based method of rendering voxels using Sparse Voxel Octrees as seen in [
 
 Currently the only way to use the library is to download the files and compile them yourself in unity.
 
-## QuickStart
+## Quick Start
 
 Place the SVO folder in your Unity Project. You must enable unsafe code: Project Settings > Player > Other Settings > Allow 'unsafe' Code.
 To get a simple octree working:
