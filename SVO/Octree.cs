@@ -18,30 +18,33 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 
 namespace SVO
 {
     public class Octree
     {
-        // These lists are effectively unmanaged memory blocks. This allows for a simple transition from CPU to GPU memory,
-        // and is much faster for the C# gc to deal with.
         public Texture3D Data { get; private set; }
 
-        private readonly List<int> _structureData = new List<int>(new[] { 1 << 31 });
-        private readonly List<int> _attributeData = new List<int>(new[] { 0 });
-
+        // These lists are effectively unmanaged memory blocks. This allows for a simple transition from CPU to GPU memory,
+        // and is much easier for the C# gc to deal with.
+        private readonly List<int> _data = new List<int>(new[] { 1 << 31 });
         private readonly List<int> _freeStructureMemory = new List<int>();
         private readonly List<int> _freeAttributeMemory = new List<int>();
+        private ulong[] _updateCount = new ulong[2048];
+        private ulong[] _lastApply = new ulong[2048];
 
         private readonly int[] _ptrStack = new int[24];
         private Vector3 _ptrStackPos = Vector3.one;
         private int _ptrStackDepth;
 
-        private Dictionary<int, bool> _dirty = new Dictionary<int, bool>();
-
         public Octree(Texture3D data)
         {
+            for (int i = 0; i < _lastApply.Length; i++)
+            {
+                _lastApply[i] = ulong.MaxValue;
+            }
             _ptrStack[0] = 0;
             Data = data;
         }
@@ -57,37 +60,40 @@ namespace SVO
         /// </summary>
         /// <param name="position">Position of the voxel, with each component in the range [-.5, .5).</param>
         /// <param name="depth">Depth of the voxel. A depth of n means a voxel of editDepth pow(2f, -n)</param>
-        /// <param name="color">Color of the voxel</param>
+        /// <param name="color">Color of the voxel. Transparency is currently ignored, unless an alpha value of 0 is
+        /// provided, in which case the voxel is simply deleted.</param>
         /// <param name="attributes">Shading data for the voxel. Best for properties like normals.</param>
-        public void SetSolidVoxel(Vector3 position, int depth, Color color, int[] attributes)
+        public void SetVoxel(Vector3 position, int depth, Color color, int[] attributes)
         {
-            SetSolidVoxel12(position + new Vector3(1.5f, 1.5f, 1.5f), depth, color, attributes);
+            SetVoxelNormalized(position + new Vector3(1.5f, 1.5f, 1.5f), depth, color, attributes);
         }
 
         /// <summary>
         /// Edits the voxel at some position with depth and attributes data.
         /// </summary>
         /// <param name="position">Position of the voxel, with each component in the range [1, 2).</param>
-        /// <param name="depth">Depth of the voxel. A depth of n means a voxel of editDepth pow(2f, -n)</param>
+        /// <param name="depth">Depth of the voxel. A depth of n means a voxel of size pow(2f, -n)</param>
         /// <param name="color">Color of the voxel</param>
         /// <param name="attributes">Shading data for the voxel. Best for properties like normals.</param>
-        private void SetSolidVoxel12(Vector3 position, int depth, Color color, int[] attributes)
+        private void SetVoxelNormalized(Vector3 position, int depth, Color color, int[] attributes)
         {
             unsafe int AsInt(float f) => *(int*)&f;
             int FirstSetHigh(int i) => (AsInt(i) >> 23) - 127;
             
-            var internalAttributes = new int[attributes.Length + 1];
-            internalAttributes[0] |= attributes.Length + 1 << 24;
-            internalAttributes[0] |= (int)(color.r * 255) << 16;
-            internalAttributes[0] |= (int)(color.g * 255) << 8;
-            internalAttributes[0] |= (int)(color.b * 255) << 0;
-            for (var i = 0; i < attributes.Length; i++) internalAttributes[i + 1] = attributes[i];
+            // Create 'internalAttributes' which is the same as attributes
+            // but with one extra int at the beggining for color and metadata
+            int[] internalAttributes = null;
+            if(color.a != 0f)
+            {
+                internalAttributes = new int[attributes.Length + 1];
+                internalAttributes[0] |= attributes.Length + 1 << 24;
+                internalAttributes[0] |= (int)(color.r * 255) << 16;
+                internalAttributes[0] |= (int)(color.g * 255) << 8;
+                internalAttributes[0] |= (int)(color.b * 255) << 0;
+                for (var i = 0; i < attributes.Length; i++) internalAttributes[i + 1] = attributes[i];
+            }
             
-            Debug.Assert(position.x < 2 && position.x >= 1);
-            Debug.Assert(position.y < 2 && position.y >= 1);
-            Debug.Assert(position.z < 2 && position.z >= 1);
-            
-            // This can skip a lot of tree iterations if the last voxel set was near this one.
+            // Attempt to skip initial tree iterations by reusing the position of the last voxel
             var differingBits = AsInt(_ptrStackPos.x) ^ AsInt(position.x);
             differingBits |= AsInt(_ptrStackPos.y) ^ AsInt(position.y);
             differingBits |= AsInt(_ptrStackPos.z) ^ AsInt(position.z);
@@ -95,12 +101,12 @@ namespace SVO
             var stepDepth = Math.Min(Math.Min(firstSet - 1, _ptrStackDepth), depth);
             
             var ptr = _ptrStack[stepDepth];
-            var type = (_structureData[ptr] >> 31) & 1; // Type of root node
-            // Step down one depth until a non-ptr node is hit or the max depth is reached.
+            var type = (_data[ptr] >> 31) & 1; // Type of root node
+            // Step down one depth until a non-ptr node is hit or the desired depth is reached.
             while(type == 0 && stepDepth < depth)
             {
                 // Descend to the next branch
-                ptr = _structureData[ptr]; 
+                ptr = _data[ptr]; 
                 
                 // Step to next node
                 stepDepth++;
@@ -112,59 +118,58 @@ namespace SVO
                 _ptrStack[stepDepth] = ptr;
                 
                 // Get type of the node
-                type = (_structureData[ptr] >> 31) & 1;
+                type = (_data[ptr] >> 31) & 1;
             }
-            _ptrStackDepth = stepDepth;
-            _ptrStackPos = position;
 
-            // Pointer will be deleted, so all children must be as well.
-            if (type == 0) _freeStructureMemory.Add(_structureData[ptr]);
-
-            var original = _structureData[ptr];
+            // The new voxels position or desired depth has now been reached
+            // delete old voxel data
+            var original = _data[ptr];
             int[] originalShadingData;
+            if (type == 0)
+            {
+                FreeBranch(_data[ptr]);
+            }
             if (type == 1 && original != 1 << 31)
             {
                 // Get the attributes data
-                var shadingPtr = original & 0x7FFFFFFF;
-                var size = internalAttributes.Length;
+                var attribPtr = original & 0x7FFFFFFF;
+                var size = _data[attribPtr] >> 24;
                 originalShadingData = new int[size];
                 for (var i = 0; i < size; i++)
-                    originalShadingData[i] = _attributeData[shadingPtr + i];
-                _freeAttributeMemory.Add(shadingPtr);
+                    originalShadingData[i] = _data[attribPtr + i];
+                FreeAttributes(attribPtr);
             }
-            else originalShadingData = new int[0];
+            else originalShadingData = null;
+
             while (stepDepth < depth)
             {
                 stepDepth++;
-                // Create another branch to go down another depth
-                // The last hit voxel MUST be type 1. Otherwise stepDepth == depth.
-                var branchPtr = _structureData.Count;
-                if (_freeStructureMemory.Count > 0)
-                {
-                    branchPtr = _freeStructureMemory[_freeStructureMemory.Count - 1];
-                    _freeStructureMemory.RemoveAt(_freeStructureMemory.Count - 1);
-                }
-                if (branchPtr == _structureData.Count)
-                {
-                    for (var i = 0; i < 8; i++)
-                        _structureData.Add((1 << 31) | AllocateAttributeData(originalShadingData));
-                }
-                else {
-                    for (var i = 0; i < 8; i++)
-                        _structureData[branchPtr + i] = (1 << 31) | AllocateAttributeData(originalShadingData);
-                }
-                _ptrStack[stepDepth] = branchPtr;
-                _structureData[ptr] = branchPtr;
-                ptr = branchPtr;
                 
-                // Move to the position of the right child node.
+                // Calculate index of next node
                 var xm = (AsInt(position.x) >> (23 - stepDepth)) & 1;
                 var ym = (AsInt(position.y) >> (23 - stepDepth)) & 1;
                 var zm = (AsInt(position.z) >> (23 - stepDepth)) & 1;
                 var childIndex = (xm << 2) + (ym << 1) + zm;
-                ptr += childIndex;
+                
+                // Create another branch to go down another depth
+                // The last hit voxel MUST be type 1 (Voxel). Otherwise stepDepth == depth.
+                var defaultData = new int[8];
+                for (var i = 0; i < 8; i++)
+                    if (i == childIndex)
+                        defaultData[i] = 1 << 31; // Placeholder
+                    else
+                        defaultData[i] = (1 << 31) | AllocateAttributeData(originalShadingData);
+                var branchPtr = AllocateBranch(defaultData);
+                _data[ptr] = branchPtr;
+                RecordUpdate(ptr);
+                ptr = branchPtr + childIndex;
+                _ptrStack[stepDepth] = ptr;
             }
-            _structureData[ptr] = (1 << 31) | AllocateAttributeData(internalAttributes);
+            _data[ptr] = (1 << 31) | AllocateAttributeData(internalAttributes);
+            RecordUpdate(ptr);
+            
+            _ptrStackDepth = stepDepth;
+            _ptrStackPos = position;
         }
 
         public void FillTriangle(Vector3[] vertices, int depth, Func<Bounds, Tuple<Color, int[]>> attributeGenerator)
@@ -176,7 +181,7 @@ namespace SVO
                     if (depth == currentDepth)
                     {
                         var (color, attributes) = attributeGenerator(bounds);
-                        SetSolidVoxel(bounds.min, depth, color, attributes);
+                        SetVoxel(bounds.min, depth, color, attributes);
                     }
                     else for (var i = 0; i < 8; i++) // Call recursively for children.
                     {
@@ -192,216 +197,239 @@ namespace SVO
             FillRecursively(0, new Bounds(Vector3.zero, Vector3.one));
         }
 
-        public RayHit? CastRay(Ray ray, Vector3 octreeScale, Vector3 octreePos)
+        public bool CastRay(
+            Ray world_ray, 
+            Transform octreeTransform, 
+            out RayHit hit)
         {
+            hit = new RayHit();
+            
             unsafe int AsInt(float f) => *(int*)&f;
-            unsafe float AsFloat(int i) => *(float*)&i;
-            int FirstSetHigh(int i) => (AsInt(i) >> 23) - 127;
+            unsafe float AsFloat(int value) => *(float*)&value;
+            int FirstSetHigh(int value) => (AsInt(value) >> 23) - 127;
+            int GetType(int value) => (value >> 31) & 1;
+            Vector3 VecMul(Vector3 a, Vector3 b) => new Vector3(a.x * b.x, a.y * b.y, a.z * b.z);
+            Vector3 VecClamp(Vector3 a, float min, float max) => 
+                new Vector3(Mathf.Clamp(a.x, min, max), 
+                    Mathf.Clamp(a.y, min, max), 
+                    Mathf.Clamp(a.z, min, max));
             
-            ray.direction.Scale(new Vector3(1 / octreeScale.x, 1 / octreeScale.y, 1 / octreeScale.z));
-            ray.direction.Normalize();
-            var rayOrigin = ray.origin;
-            rayOrigin += octreeScale * 1.5f;
-            rayOrigin -= octreePos;
-            rayOrigin.Scale(new Vector3(1 / octreeScale.x, 1 / octreeScale.y, 1 / octreeScale.z));
-            
-            const int maxDepth = 23;
-            const float epsilon = 0.00000011920929f;
+            var ray_dir = (Vector3)(octreeTransform.worldToLocalMatrix * new Vector4(world_ray.direction.x, world_ray.direction.y, world_ray.direction.z, 0));
+            var ray_origin = (Vector3)(octreeTransform.worldToLocalMatrix * new Vector4(world_ray.origin.x, world_ray.origin.y, world_ray.origin.z, 1));
+            // Calculations assume octree voxels are in [1, 2) but object is in [-.5, .5]. This corrects that.
+            ray_origin += new Vector3(1.5f, 1.5f, 1.5f);
+             
+            const int max_depth = 23;
+            const float epsilon = 0.00000011920928955078125f;
             // Mirror coordinate system such that all ray direction components are negative.
-            int signMask = 0;
-            if (ray.direction.x > 0f)
+            int sign_mask = 0;
+            if(ray_dir.x > 0f)
             {
-                signMask ^= 4;
-                rayOrigin.x = 3f - rayOrigin.x;
+                sign_mask ^= 4; 
+                ray_origin.x = 3f - ray_origin.x;
+            }
+            if(ray_dir.y > 0f)
+            {
+                sign_mask ^= 2; 
+                ray_origin.y = 3f - ray_origin.y;
+            }
+            if(ray_dir.z > 0f)
+            {
+                sign_mask ^= 1; 
+                ray_origin.z = 3f - ray_origin.z;
             }
 
-            if (ray.direction.y > 0f)
+            ray_dir = -new Vector3(Mathf.Abs(ray_dir.x), Mathf.Abs(ray_dir.y), Mathf.Abs(ray_dir.z));
+            var ray_inv_dir = -new Vector3(Mathf.Abs(1 / ray_dir.x), Mathf.Abs(1 / ray_dir.y), Mathf.Abs(1 / ray_dir.z));
+            
+            // Get intersections of octree (if hit)
+            var root_min_distances = VecMul(Vector3.one * 2f - ray_origin, ray_inv_dir);
+            var root_max_distances = VecMul(Vector3.one - ray_origin, ray_inv_dir);
+            var root_tmin = Mathf.Max(Mathf.Max(Mathf.Max(root_min_distances.x, root_min_distances.y), root_min_distances.z), 0);
+            var root_tmax = Mathf.Min(Mathf.Min(root_max_distances.x, root_max_distances.y), root_max_distances.z);
+            
+            if(root_tmax < 0 || root_tmin >= root_tmax) return false;
+            if(root_tmin == root_min_distances.x)
             {
-                signMask ^= 2;
-                rayOrigin.y = 3f - rayOrigin.y;
+                hit.faceNormal = new Vector3(1, 0, 0);
+                if((sign_mask >> 2) != 0)
+                    hit.faceNormal.x = -hit.faceNormal.x;
             }
-
-            if (ray.direction.z > 0f)
+            else if(root_tmin == root_min_distances.y)
             {
-                signMask ^= 1;
-                rayOrigin.z = 3f - rayOrigin.z;
+                hit.faceNormal = new Vector3(0, 1, 0);
+                if((sign_mask >> 1 & 1) != 0)
+                    hit.faceNormal.y = -hit.faceNormal.y;
             }
-
-            ray.direction = -new Vector3(Mathf.Abs(ray.direction.x), Mathf.Abs(ray.direction.y), Mathf.Abs(ray.direction.z));
+            else
+            {
+                hit.faceNormal = new Vector3(0, 0, 1);
+                if((sign_mask & 1) != 0)
+                    hit.faceNormal.z = -hit.faceNormal.z;
+            }
             
-            // Get intersections of chunk (if hit)
-            Vector3 rootMinDistances = Vector3.one * 2f - rayOrigin;
-            rootMinDistances.Scale(new Vector3(1 / ray.direction.x, 1 / ray.direction.y, 1 / ray.direction.z));
-            Vector3 rootMaxDistances = Vector3.one - rayOrigin;
-            rootMaxDistances.Scale(new Vector3(1 / ray.direction.x, 1 / ray.direction.y, 1 / ray.direction.z));
-            float rootTmin = Mathf.Max(Mathf.Max(Mathf.Max(rootMinDistances.x, rootMinDistances.y), rootMinDistances.z), 0);
-            float rootTmax = Mathf.Min(Mathf.Min(rootMaxDistances.x, rootMaxDistances.y), rootMaxDistances.z);
+            Vector3 next_path = VecClamp(ray_origin + ray_dir * root_tmin, 1f, AsFloat(0x3fffffff));
             
-            if(rootTmax < 0 || rootTmin >= rootTmax)
-                return null;
-            
-            Vector3 nextPath = rayOrigin + ray.direction * rootTmin;
-            nextPath.x = Mathf.Clamp(nextPath.x, 1f, AsFloat(0x3fffffff));
-            nextPath.y = Mathf.Clamp(nextPath.y, 1f, AsFloat(0x3fffffff));
-            nextPath.z = Mathf.Clamp(nextPath.z, 1f, AsFloat(0x3fffffff));
-            
-            int[] stack = new int[maxDepth + 1];
+            var stack = new int[max_depth + 1];
             stack[0] = 0;
-            int stackDepth = 0;
-            Vector3 stackPath = new Vector3(1, 1, 1);
+            var stack_depth = 0;
+            Vector3 stack_path = new Vector3(1, 1, 1);
 
+            int i = 0;
             do
             {
-                // GET voxel at targetPos
-                int differingBits = AsInt(stackPath.x) ^ AsInt(nextPath.x);
-                differingBits |= AsInt(stackPath.y) ^ AsInt(nextPath.y);
-                differingBits |= AsInt(stackPath.z) ^ AsInt(nextPath.z);
-                int firstSet = 23 - FirstSetHigh(differingBits);
-                int depth = Mathf.Min(firstSet - 1, stackDepth);
-                int ptr = stack[depth];
-                int type = _structureData[ptr] >> 31 & 1;
+                i++;
+                // Get voxel at targetPos
+                var differing_bits = AsInt(stack_path.x) ^ AsInt(next_path.x);
+                differing_bits |= AsInt(stack_path.y) ^ AsInt(next_path.y);
+                differing_bits |= AsInt(stack_path.z) ^ AsInt(next_path.z);
+                var first_set = 23 - FirstSetHigh(differing_bits);
+                var depth = Mathf.Min(first_set - 1, stack_depth);
+                var ptr = stack[depth];
+                int data = _data[ptr];
+                int type = GetType(data);
                 while(type == 0)
                 {
-                    ptr = _structureData[ptr];
+                    ptr = data;
                     depth++;
-                    int xm = AsInt(nextPath.x) >> 23 - depth & 1;
-                    int ym = AsInt(nextPath.y) >> 23 - depth & 1;
-                    int zm = AsInt(nextPath.z) >> 23 - depth & 1;
-                    int childIndex = (xm << 2) + (ym << 1) + zm;
-                    childIndex ^= signMask;
-                    ptr += childIndex;
+                    int xm = (AsInt(next_path.x) >> (23 - depth)) & 1; // 1 or 0 for sign of movement in x direction
+                    int ym = (AsInt(next_path.y) >> (23 - depth)) & 1; // 1 or 0 for sign of movement in y direction
+                    int zm = (AsInt(next_path.z) >> (23 - depth)) & 1; // 1 or 0 for sign of movement in z direction
+                    int child_index = (xm << 2) + (ym << 1) + zm;
+                    child_index ^= sign_mask;
+                    ptr += child_index;
                     stack[depth] = ptr;
-                    type = _structureData[ptr] >> 31 & 1;
+                    data = _data[ptr]; // Follow ptr
+                    type = GetType(data);
                 }
-                stackDepth = depth;
-                // Remove unused bits
-                stackPath.x = AsFloat(AsInt(nextPath.x) & ~((1 << 23 - depth) - 1));
-                stackPath.y = AsFloat(AsInt(nextPath.y) & ~((1 << 23 - depth) - 1));
-                stackPath.z = AsFloat(AsInt(nextPath.z) & ~((1 << 23 - depth) - 1));
+                stack_depth = depth;
+                stack_path = new Vector3(
+                    AsFloat(AsInt(next_path.x) & ~((1 << 23 - depth) - 1)),
+                    AsFloat(AsInt(next_path.y) & ~((1 << 23 - depth) - 1)),
+                    AsFloat(AsInt(next_path.z) & ~((1 << 23 - depth) - 1))
+                ); // Remove unused bits
                 
                 // Return hit if voxel is solid
-                if(type == 1 && _structureData[ptr] != 1 << 31)
+                if(type == 1 && data != (1 << 31))
                 {
-                    RayHit hit = new RayHit();
+                    int attributes_head_ptr = data & ~(1 << 31);
 
-                    int shadingPtr = _structureData[ptr] & 0x7FFFFFFF;
-                    
-                    int colorData = _attributeData[shadingPtr];
-                    hit.color = new Color((colorData >> 16 & 0xFF) / 255f, (colorData >> 8 & 0xFF) / 255f, (colorData & 0xFF) / 255f);
-                    
-                    // Normals transformed to [0, 1] range
-                    int normalData = _attributeData[shadingPtr + 1];
-                    int normalSignBit = normalData >> 22 & 1;
-                    int axis = normalData >> 20 & 3;
-                    int comp2 = normalData >> 10 & 0x3FF;
-                    int comp1 = normalData & 0x3FF;
-
-                    Vector3 normal = new Vector3(0, 0, 0);
-                    switch(axis)
-                    {
-                        case 0:
-                            normal.x = normalSignBit * 2f - 1;
-                            normal.y = comp2 / 1023f * 2f - 1;
-                            normal.z = comp1 / 1023f * 2f - 1;
-                            break;
-                        case 1:
-                            normal.x = comp2 / 1023f * 2f - 1;
-                            normal.y = normalSignBit * 2f - 1;
-                            normal.z = comp1 / 1023f * 2f - 1;
-                            break;
-                        case 2:
-                            normal.x = comp2 / 1023f * 2f - 1;
-                            normal.y = comp1 / 1023f * 2f - 1;
-                            normal.z = normalSignBit * 2f - 1;
-                            break;
-                    }
-                    normal.Normalize();
-                    hit.normal = normal;
+                    int color_data = _data[attributes_head_ptr];
+                    hit.attributesPtr = attributes_head_ptr + 1;
+                    hit.color = new Vector4((color_data >> 16 & 0xFF) / 255f, (color_data >> 8 & 0xFF) / 255f, (color_data & 0xFF) / 255f, (color_data >> 24 & 0xFF) / 255f);
 
                     // Undo coordinate mirroring in next_path
-                    Vector3 mirroredPath = nextPath;
-                    //float editDepth = exp2(-depth);
-                    if(signMask >> 2 != 0) mirroredPath.x = 3f - nextPath.x;
-                    if((signMask >> 1 & 1) != 0) mirroredPath.y = 3f - nextPath.y;
-                    if((signMask & 1) != 0) mirroredPath.z = 3f - nextPath.z;
-                    hit.octreePosition = mirroredPath;
-                    hit.worldPosition = mirroredPath - Vector3.one * 1.5f;
-                    hit.worldPosition.Scale(octreeScale);
-                    hit.worldPosition += octreePos;
+                    Vector3 mirrored_path = next_path;
+                    hit.voxelObjSize = AsFloat((0b01111111 - depth) << 23); // exp2(-depth)
+                    if(sign_mask >> 2 != 0)
+                    {
+                        hit.faceNormal.x = -hit.faceNormal.x;
+                        mirrored_path.x = 3f - next_path.x;
+                    }
+                    if((sign_mask >> 1 & 1) != 0)
+                    {
+                        hit.faceNormal.y = -hit.faceNormal.y;
+                        mirrored_path.y = 3f - next_path.y;
+                    }
+                    if((sign_mask & 1) != 0)
+                    {
+                        hit.faceNormal.z = -hit.faceNormal.z;
+                        mirrored_path.z = 3f - next_path.z;
+                    }
+                    hit.voxelObjPos -= Vector3.one * 1.5f;
+                    hit.objPos = mirrored_path - Vector3.one * 1.5f;
+                    hit.voxelObjPos = new Vector3(
+                        AsFloat(AsInt(mirrored_path.x) & ~((1 << 23 - depth) - 1)) - 1.5f,
+                        AsFloat(AsInt(mirrored_path.y) & ~((1 << 23 - depth) - 1)) - 1.5f,
+                        AsFloat(AsInt(mirrored_path.z) & ~((1 << 23 - depth) - 1)) - 1.5f
+                        );
+                    hit.worldPos = octreeTransform.localToWorldMatrix * new Vector4(hit.objPos.x, hit.objPos.y, hit.objPos.z, 1f);
                     
-                    var xNear = AsFloat(AsInt(stackPath.x) + (1 << (23 - depth)));
-                    var yNear = AsFloat(AsInt(stackPath.y) + (1 << (23 - depth)));
-                    var zNear = AsFloat(AsInt(stackPath.z) + (1 << (23 - depth)));
-                    var txMin = (xNear - rayOrigin.x) / ray.direction.x;
-                    var tyMin = (yNear - rayOrigin.y) / ray.direction.y;
-                    var tzMin = (zNear - rayOrigin.z) / ray.direction.z;
-                    var tMin = Mathf.Max(Mathf.Max(txMin, tyMin), tzMin);
-
-                    hit.faceNormal = Vector3.zero;
-                    if (txMin >= tMin)
-                    {
-                        hit.octreePosition.x = xNear;
-                        if ((signMask & 4) != 0)
-                        {
-                            hit.octreePosition.x = 3f - hit.octreePosition.x;
-                        }
-                        hit.faceNormal.x = (signMask & 4) == 0 ? 1 : -1;
-                    }
-                    else if (tyMin >= tMin)
-                    {
-                        hit.octreePosition.y = yNear;
-                        if ((signMask & 2) != 0)
-                        {
-                            hit.octreePosition.y = 3f - hit.octreePosition.y;
-                        }
-                        hit.faceNormal.y = (signMask & 2) == 0 ? 1 : -1;
-                    }
-                    else if (tzMin >= tMin)
-                    {
-                        hit.octreePosition.z = zNear;
-                        if ((signMask & 1) != 0)
-                        {
-                            hit.octreePosition.z = 3f - hit.octreePosition.z;
-                        }
-                        hit.faceNormal.z = (signMask & 1) == 0 ? 1 : -1;
-                    }
-                    
-                    return hit;
+                    return true;
                 }
 
                 // Step to the next voxel by moving along the normal on the far side of the voxel that was hit.
-                var xFar = stackPath.x;
-                var yFar = stackPath.y;
-                var zFar = stackPath.z;
-                var txMax = (xFar - rayOrigin.x) / ray.direction.x;
-                var tyMax = (yFar - rayOrigin.y) / ray.direction.y;
-                var tzMax = (zFar - rayOrigin.z) / ray.direction.z;
-                var tMax = Mathf.Min(Mathf.Min(txMax, tyMax), tzMax);
-                nextPath.x = Mathf.Clamp(rayOrigin.x + ray.direction.x * tMax, stackPath.x, 
-                    AsFloat(AsInt(stackPath.x) + (1 << (23 - depth)) - 1));
-                nextPath.y = Mathf.Clamp(rayOrigin.y + ray.direction.y * tMax, stackPath.y, 
-                    AsFloat(AsInt(stackPath.y) + (1 << (23 - depth)) - 1));
-                nextPath.z = Mathf.Clamp(rayOrigin.z + ray.direction.z * tMax, stackPath.z, 
-                    AsFloat(AsInt(stackPath.z) + (1 << (23 - depth)) - 1));
+                var t_max = VecMul((stack_path - ray_origin), ray_inv_dir);
+                var min_t_max = Mathf.Min(Mathf.Min(t_max.x, t_max.y), t_max.z);
+                var cmax = new Vector3(
+                    AsFloat(AsInt(stack_path.x) + (1 << 23 - depth) - 1),
+                    AsFloat(AsInt(stack_path.y) + (1 << 23 - depth) - 1),
+                    AsFloat(AsInt(stack_path.z) + (1 << 23 - depth) - 1)
+                );
+                next_path = new Vector3(
+                    Mathf.Clamp(ray_origin.x + ray_dir.x * min_t_max, stack_path.x, cmax.x),
+                    Mathf.Clamp(ray_origin.y + ray_dir.y * min_t_max, stack_path.y, cmax.y),
+                    Mathf.Clamp(ray_origin.z + ray_dir.z * min_t_max, stack_path.z, cmax.z)
+                );
 
-                if(txMax <= tMax) nextPath.x = xFar - epsilon;
-                if(tyMax <= tMax) nextPath.y = yFar - epsilon;
-                if(tzMax <= tMax) nextPath.z = zFar - epsilon;
+                if(t_max.x == min_t_max)
+                {
+                    hit.faceNormal = new Vector3(1, 0, 0);
+                    next_path.x = stack_path.x - epsilon;
+                }
+                else if(t_max.y == min_t_max)
+                {
+                    hit.faceNormal = new Vector3(0, 1, 0);
+                    next_path.y = stack_path.y - epsilon;
+                }
+                else
+                {
+                    hit.faceNormal = new Vector3(0, 0, 1);
+                    next_path.z = stack_path.z - epsilon;
+                }
             }
-            while((AsInt(nextPath.x) & 0xFF800000) == 0x3f800000 && 
-                  (AsInt(nextPath.y) & 0xFF800000) == 0x3f800000 && 
-                  (AsInt(nextPath.z) & 0xFF800000) == 0x3f800000);
+            while((AsInt(next_path.x) & 0xFF800000) == 0x3f800000 && 
+                  (AsInt(next_path.y) & 0xFF800000) == 0x3f800000 && 
+                  (AsInt(next_path.z) & 0xFF800000) == 0x3f800000 && 
+                  i <= 250); // Same as 1 <= next_path < 2 && i <= 250
 
-            return null;
+            return false;
+        }
+
+        private void FreeBranch(int ptr)
+        {
+            _freeStructureMemory.Add(ptr);
+            for (var i = 0; i < 8; i++)
+            {
+                var type = (_data[ptr + i] >> 31) & 1;
+                if(type == 0)
+                    FreeBranch(_data[ptr + i]);
+            }
+        }
+
+        private void FreeAttributes(int ptr)
+        {
+            _freeAttributeMemory.Add(ptr);
+        }
+        
+        private int AllocateBranch(IReadOnlyList<int> ptrs)
+        {
+            int ptr;
+            if (_freeStructureMemory.Count == 0)
+            {
+                ptr = _data.Count;
+                _data.AddRange(ptrs);
+            }
+            else
+            {
+                ptr = _freeStructureMemory.Last();
+                for (var i = 0; i < ptrs.Count; i++)
+                    _data[i + ptr] = ptrs[i];
+                _freeStructureMemory.RemoveAt(_freeStructureMemory.Count - 1);
+            }
+            // Only need to record update twice because branch can only be in 2 slices at most
+            RecordUpdate(ptr);
+            RecordUpdate(ptr + 7);
+            return ptr;
         }
 
         private int AllocateAttributeData(IReadOnlyList<int> attributes)
         {
-            if (attributes.Count == 0) return 0;
+            if (attributes == null) return 0;
             var index = 0;
             foreach (var ptr in _freeAttributeMemory)
             {
-                var size = (uint)_attributeData[ptr] >> 24;
+                var size = (uint)_data[ptr] >> 24;
                 if (size != attributes.Count)
                 {
                     index++;
@@ -410,63 +438,71 @@ namespace SVO
                 
                 for (var i = 0; i < attributes.Count; i++)
                 {
-                    _attributeData[ptr + i] = attributes[i];
+                    _data[ptr + i] = attributes[i];
                 }
+                if (attributes.Count > 256 * 256) throw new ArgumentException("Too many attributes. Max number is 65536 per voxel.");
+                // Assume attributes.Count is less than the size of one slice.
+                RecordUpdate(ptr);
+                RecordUpdate(ptr + attributes.Count - 1);
                 _freeAttributeMemory.RemoveAt(index);
                 return ptr;
             }
 
-            var endPtr = _attributeData.Count;
-            _attributeData.AddRange(attributes);
+            var endPtr = _data.Count;
+            _data.AddRange(attributes);
+            RecordUpdate(endPtr);
+            RecordUpdate(endPtr + attributes.Count - 1);
             return endPtr;
         }
 
-        public Texture3D Apply(bool tryReuseOldTexture)
+        /// <summary>
+        /// Creates a texture to contain this octree.
+        /// </summary>
+        /// <param name="tryReuseOldTexture">Attempt to reuse the previous texture. This can be faster, but the old texture will no longer be usable.</param>
+        /// <returns>A new texture containing the updated Octree.</returns>
+        public Texture3D Apply(bool tryReuseOldTexture=true)
         {
-            Debug.Assert(!(_structureData is null) && !(_attributeData is null));
-            var structureDepth = Mathf.NextPowerOfTwo(Mathf.CeilToInt(Mathf.CeilToInt((float) _structureData.Count / 2048 / 2048)));
-            var attributeDepth = Mathf.NextPowerOfTwo(Mathf.CeilToInt((float) (_attributeData.Count + 1) / 2048 / 2048)); // Add one for structure depth
-            
-            if (Data is null || structureDepth + attributeDepth != Data.depth && tryReuseOldTexture)
+            var depth = Mathf.NextPowerOfTwo(Mathf.CeilToInt((float) _data.Count / 256 / 256));
+            if (Data is null || depth != Data.depth || !tryReuseOldTexture)
             {
-                Data = new Texture3D(2048, 2048, structureDepth + attributeDepth, TextureFormat.RFloat, false);
+                Data = new Texture3D(256, 256, depth, TextureFormat.RFloat, false);
             }
 
-            for (var i = 0; i < structureDepth; i++)
+            uint updated = 0;
+            for (var i = 0; i < depth; i++)
             {
-                var minIndex = i * 2048 * 2048;
-                var maxIndex = (i + 1) * 2048 * 2048;
-                if (minIndex > _structureData.Count) minIndex = _structureData.Count;
-                if (maxIndex > _structureData.Count) maxIndex = _structureData.Count;
+                if (_lastApply[i] == _updateCount[i])
+                    continue;
+
+                updated++;
+                _lastApply[i] = _updateCount[i];
+                
+                var minIndex = i * 256 * 256;
+                var maxIndex = (i + 1) * 256 * 256;
+                if (minIndex > _data.Count) minIndex = _data.Count;
+                if (maxIndex > _data.Count) maxIndex = _data.Count;
                 
                 if (minIndex >= maxIndex) break;
-                var block = new int[2048 * 2048];
-                _structureData.CopyTo(minIndex, block, 0, maxIndex - minIndex);
-                var tempTex = new Texture3D(2048, 2048, 1, TextureFormat.RFloat, false);
+                var block = new int[256 * 256];
+                _data.CopyTo(minIndex, block, 0, maxIndex - minIndex);
+                var tempTex = new Texture3D(256, 256, 1, TextureFormat.RFloat, false);
                 tempTex.SetPixelData(block, 0);
                 tempTex.Apply();
-                Graphics.CopyTexture(tempTex, 0, 0, 0, 0, 2048, 2048, Data, i, 0, 0, 0);
+                Graphics.CopyTexture(tempTex, 0, 0, 0, 0, 256, 256, Data, i, 0, 0, 0);
                 
             }
-            
-            for (var i = 0; i < attributeDepth; i++)
+
+            if (updated != 0)
             {
-                var minIndex = i * 2048 * 2048;
-                var maxIndex = (i + 1) * 2048 * 2048;
-                if (minIndex > _attributeData.Count) minIndex = _attributeData.Count;
-                if (maxIndex > _attributeData.Count) maxIndex = _attributeData.Count;
-                
-                var block = new int[2048 * 2048];
-                if (minIndex < maxIndex)
-                    _attributeData.CopyTo(minIndex, block, 0, maxIndex - minIndex);
-                if (i == attributeDepth - 1) block[block.Length - 1] = structureDepth;
-                var tempTex = new Texture3D(2048, 2048, 1, TextureFormat.RFloat, false);
-                tempTex.SetPixelData(block, 0);
-                tempTex.Apply();
-                Graphics.CopyTexture(tempTex, 0, 0, 0, 0, 2048, 2048, Data, i + structureDepth, 0, 0, 0);
+                Data.IncrementUpdateCount();
+                Debug.Log(updated);
             }
-            Data.IncrementUpdateCount();
             return Data;
+        }
+
+        private void RecordUpdate(int idx)
+        {
+            _updateCount[idx >> 16]++;
         }
     }
 }
