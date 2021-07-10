@@ -20,10 +20,11 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
+using Object = UnityEngine.Object;
 
 namespace SVO
 {
-    public class Octree
+    public class Octree : IDisposable
     {
         private static Texture3D tempTex = null;
         
@@ -31,22 +32,20 @@ namespace SVO
 
         // These lists are effectively unmanaged memory blocks. This allows for a simple transition from CPU to GPU memory,
         // and is much easier for the C# gc to deal with.
-        private readonly List<int> _data = new List<int>(new[] { 1 << 31 });
+        private List<int> _data = new List<int>(new[] { 1 << 31 });
         private readonly HashSet<int> _freeStructureMemory = new HashSet<int>();
         private readonly HashSet<int> _freeAttributeMemory = new HashSet<int>();
         private ulong[] _updateCount = new ulong[2048];
         private ulong[] _lastApply = new ulong[2048];
 
-        private readonly int[] _ptrStack = new int[24];
+        private int[] _ptrStack = new int[24];
         private Vector3 _ptrStackPos = Vector3.one;
         private int _ptrStackDepth;
 
         public Octree(Texture3D data)
         {
             for (int i = 0; i < _lastApply.Length; i++)
-            {
                 _lastApply[i] = ulong.MaxValue;
-            }
             _ptrStack[0] = 0;
             Data = data;
         }
@@ -81,6 +80,10 @@ namespace SVO
         {
             unsafe int AsInt(float f) => *(int*)&f;
             int FirstSetHigh(int i) => (AsInt(i) >> 23) - 127;
+
+            position.x = Mathf.Clamp(position.x, 1f, 1.99999988079f);
+            position.y = Mathf.Clamp(position.y, 1f, 1.99999988079f);
+            position.z = Mathf.Clamp(position.z, 1f, 1.99999988079f);
             
             // Create 'internalAttributes' which is the same as attributes
             // but with one extra int at the beggining for color and metadata
@@ -135,7 +138,7 @@ namespace SVO
             {
                 // Get the attributes data
                 var attribPtr = original & 0x7FFFFFFF;
-                var size = _data[attribPtr] >> 24;
+                var size = (_data[attribPtr] >> 24) & 0xFF;
                 originalShadingData = new int[size];
                 for (var i = 0; i < size; i++)
                     originalShadingData[i] = _data[attribPtr + i];
@@ -473,7 +476,10 @@ namespace SVO
             var depth = Mathf.NextPowerOfTwo(Mathf.CeilToInt((float) _data.Count / 256 / 256));
             if (Data is null || depth != Data.depth || !tryReuseOldTexture)
             {
+                Object.Destroy(Data);
                 Data = new Texture3D(256, 256, depth, TextureFormat.RFloat, false);
+                for (int i = 0; i < _lastApply.Length; i++)
+                    _lastApply[i] = ulong.MaxValue;
             }
 
             uint updated = 0;
@@ -507,16 +513,77 @@ namespace SVO
         }
 
         /// <summary>
-        /// Optimize the octree. This can help reduce memory and possibly performance overhead, but may take a while.
+        /// Rebuilds the internal structure of the octree. This makes the octree memory continuous, lowering memory
+        /// overhead and potentially increasing performance.
         /// </summary>
-        public void Optimize()
+        public void Rebuild()
         {
-            // TODO: Rebuild _data but remove free space
+            var capacity = Mathf.NextPowerOfTwo(_data.Count - _freeStructureMemory.Count * 8 - _freeAttributeMemory.Count);
+            var optimizedData = new List<int>(capacity);
+
+            void RebuildBranch(int referenceBranchPtr)
+            {
+                var start = optimizedData.Count;
+                optimizedData.AddRange(new int[8]);
+                for (var i = 0; i < 8; i++)
+                {
+                    if (_data[referenceBranchPtr + i] == 1 << 31)
+                    {
+                        optimizedData[start + i] = 1 << 31;
+                    }
+                    else if ((_data[referenceBranchPtr + i] >> 31 & 1) == 1)
+                    {
+                        optimizedData[start + i] = 1 << 31 | optimizedData.Count;
+                        var attribPtr = _data[referenceBranchPtr + i] & 0x7FFFFFFF;
+                        var c = (_data[attribPtr] >> 24) & 0xFF;
+                        for(var j = 0; j < c; j++)
+                            optimizedData.Add(_data[attribPtr + j]);
+                    }
+                    else
+                    {
+                        optimizedData[start + i] = optimizedData.Count;
+                        RebuildBranch(_data[referenceBranchPtr + i]);
+                    }
+                }   
+            }
+
+            if (_data[0] == 1 << 31)
+            {
+                optimizedData.Add(1 << 31);
+            }
+            else if ((_data[0] >> 31 & 1) == 1)
+            {
+                optimizedData.Add(1 << 31 | (optimizedData.Count + 1));
+                var attribPtr = _data[0] & 0x7FFFFFFF;
+                var c = (_data[attribPtr] >> 24) & 0xFF;
+                for(var j = 0; j < c; j++)
+                    optimizedData.Add(_data[attribPtr + j]);
+            }
+            else
+            {
+                optimizedData.Add(optimizedData.Count + 1);
+                RebuildBranch(_data[0]);
+            }
+
+            _data = optimizedData;
+            _ptrStackDepth = 0;
+            _ptrStackPos = Vector3.one;
+            _ptrStack = new int[24];
+            _freeAttributeMemory.Clear();
+            _freeStructureMemory.Clear();
+            _lastApply = new ulong[2048];
+            for (var i = 0; i < _lastApply.Length; i++)
+                _lastApply[i] = ulong.MaxValue;
         }
 
         private void RecordUpdate(int idx)
         {
             _updateCount[idx >> 16]++;
+        }
+
+        public void Dispose()
+        {
+            Object.Destroy(Data);
         }
     }
 }
