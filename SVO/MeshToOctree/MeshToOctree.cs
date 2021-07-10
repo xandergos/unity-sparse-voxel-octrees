@@ -21,6 +21,8 @@ using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
 
+#if UNITY_EDITOR
+
 namespace SVO
 {
     public abstract class MeshToOctree: MonoBehaviour
@@ -112,3 +114,5 @@ namespace SVO
         }
     }
 }
+
+#endif

@@ -25,13 +25,15 @@ namespace SVO
 {
     public class Octree
     {
+        private static Texture3D tempTex = null;
+        
         public Texture3D Data { get; private set; }
 
         // These lists are effectively unmanaged memory blocks. This allows for a simple transition from CPU to GPU memory,
         // and is much easier for the C# gc to deal with.
         private readonly List<int> _data = new List<int>(new[] { 1 << 31 });
-        private readonly List<int> _freeStructureMemory = new List<int>();
-        private readonly List<int> _freeAttributeMemory = new List<int>();
+        private readonly HashSet<int> _freeStructureMemory = new HashSet<int>();
+        private readonly HashSet<int> _freeAttributeMemory = new HashSet<int>();
         private ulong[] _updateCount = new ulong[2048];
         private ulong[] _lastApply = new ulong[2048];
 
@@ -127,7 +129,7 @@ namespace SVO
             int[] originalShadingData;
             if (type == 0)
             {
-                FreeBranch(_data[ptr]);
+                FreeBranch(original);
             }
             if (type == 1 && original != 1 << 31)
             {
@@ -391,9 +393,12 @@ namespace SVO
             _freeStructureMemory.Add(ptr);
             for (var i = 0; i < 8; i++)
             {
-                var type = (_data[ptr + i] >> 31) & 1;
+                var optr = ptr + i;
+                var type = (_data[optr] >> 31) & 1;
                 if(type == 0)
-                    FreeBranch(_data[ptr + i]);
+                    FreeBranch(_data[optr]);
+                else if(_data[optr] != 1 << 31)
+                    FreeAttributes(_data[optr] & 0x7FFFFFFF);
             }
         }
 
@@ -415,7 +420,7 @@ namespace SVO
                 ptr = _freeStructureMemory.Last();
                 for (var i = 0; i < ptrs.Count; i++)
                     _data[i + ptr] = ptrs[i];
-                _freeStructureMemory.RemoveAt(_freeStructureMemory.Count - 1);
+                _freeStructureMemory.Remove(ptr);
             }
             // Only need to record update twice because branch can only be in 2 slices at most
             RecordUpdate(ptr);
@@ -444,7 +449,7 @@ namespace SVO
                 // Assume attributes.Count is less than the size of one slice.
                 RecordUpdate(ptr);
                 RecordUpdate(ptr + attributes.Count - 1);
-                _freeAttributeMemory.RemoveAt(index);
+                _freeAttributeMemory.Remove(ptr);
                 return ptr;
             }
 
@@ -462,6 +467,9 @@ namespace SVO
         /// <returns>A new texture containing the updated Octree.</returns>
         public Texture3D Apply(bool tryReuseOldTexture=true)
         {
+            if (tempTex is null)
+                tempTex = new Texture3D(256, 256, 1, TextureFormat.RFloat, false);
+            
             var depth = Mathf.NextPowerOfTwo(Mathf.CeilToInt((float) _data.Count / 256 / 256));
             if (Data is null || depth != Data.depth || !tryReuseOldTexture)
             {
@@ -485,7 +493,6 @@ namespace SVO
                 if (minIndex >= maxIndex) break;
                 var block = new int[256 * 256];
                 _data.CopyTo(minIndex, block, 0, maxIndex - minIndex);
-                var tempTex = new Texture3D(256, 256, 1, TextureFormat.RFloat, false);
                 tempTex.SetPixelData(block, 0);
                 tempTex.Apply();
                 Graphics.CopyTexture(tempTex, 0, 0, 0, 0, 256, 256, Data, i, 0, 0, 0);
@@ -495,9 +502,16 @@ namespace SVO
             if (updated != 0)
             {
                 Data.IncrementUpdateCount();
-                Debug.Log(updated);
             }
             return Data;
+        }
+
+        /// <summary>
+        /// Optimize the octree. This can help reduce memory and possibly performance overhead, but may take a while.
+        /// </summary>
+        public void Optimize()
+        {
+            // TODO: Rebuild _data but remove free space
         }
 
         private void RecordUpdate(int idx)

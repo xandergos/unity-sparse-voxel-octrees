@@ -16,6 +16,8 @@
  *  along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#if UNITY_EDITOR
+
 using UnityEditor;
 using UnityEngine;
 
@@ -35,3 +37,5 @@ namespace SVO
         }
     }
 }
+
+#endif
