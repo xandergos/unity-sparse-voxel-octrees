@@ -19,7 +19,7 @@ A demo with code is available [here](https://github.com/BudgetToaster/unity-svo-
 
 ## Screenshot
 
-This image contains voxels from the minimum size of 2^-23 up to approximately 2^-8. At this scale there are a lot of artifacts due to floating point errors, but in practice this will not happen.
+This image contains voxels from the minimum size of 2^-23 up to approximately 2^-8. At this scale there are a lot of artifacts due to floating point errors, but in practice (when working at reasonable scales) this will not happen.
 
 ![image](https://user-images.githubusercontent.com/28935064/132603244-ad48f9f3-82f7-41aa-afe5-546eeec427d0.png)
 
