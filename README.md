@@ -27,3 +27,4 @@ This image contains voxels from the minimum size of 2^-23 up to approximately 2^
 
 - Deformations, such as vertex deformations commonly used to animate characters or other objects, are not implemented, and are not planned (If its even possible).
 - No collider support. Unlike normal meshes, there is no built-in collider for representing an Octree. Any octree-based object will need to be represented using an approximate collider. This is not a huge deal, as an approximate collider is generally the more performant approach with traditional triangle-based meshes anyways. Theoretically, an exact octree collider could be made by recreating the octree using box colliders, but this would be memory intensive and slow, and implementation would take time, so this is not planned.
+- No shadows. Someone with experience developing shaders in Unity could resolve this, but as of now I do not have the time to add them in. PRs are welcome.
